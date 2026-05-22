@@ -21,6 +21,7 @@ from CESTA.schema import (
 )
 from CESTA.schema.config import load_config_file
 from CESTA.schema.fault import FaultType
+from CESTA.seed import seed_everything
 from CESTA.training import (
     CheckpointCallback,
     EarlyStoppingCallback,
@@ -90,6 +91,7 @@ def train(
 
     input_size = prepared.input_size
     num_classes = FaultType.count()
+    seed_everything(config.seed)
     logger.debug(
         "Creating model: arch={}, input_size={}, num_classes={}",
         config.model,

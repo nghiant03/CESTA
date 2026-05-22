@@ -249,27 +249,31 @@ ESP32-S3 is a loose target, not a strict hard requirement. The model should aim 
 
 ## Current evidence
 
-The current decisive development setting is `Intel_fault15` with `features: ["temp"]`. Dense CESTA has now exceeded the same-split GRU temporal reference, but only modestly:
+The current decisive development setting is `Intel_fault15` with `features: ["temp"]`. Dense CESTA has now exceeded the same-split GRU temporal reference, but the margin is still below the preferred Q1-level target:
 
 | Model | Test macro-F1 | Δ vs GRU 0.9018 | Main interpretation |
 |---|---:|---:|---|
 | Same-split GRU | 0.9018 | — | current temporal reference |
 | Dense CESTA + logit correction | 0.9145 | +0.0127 | clears the minimum fault15 target |
 | Dense CESTA + boundary head/gated correction | 0.9087 | +0.0069 | underperforms; naive boundary supervision is risky |
-| Dense CESTA + logit correction + CRF | 0.9160 | +0.0142 | current dense upper-bound candidate |
+| Dense CESTA + logit correction + CRF, weight 0.05 | 0.9225 | +0.0207 | strongest test dense upper-bound candidate |
+| Dense CESTA + logit correction + CRF, weight 0.3 | 0.9198 | +0.0180 | validation-best CRF sweep setting |
 
-The CRF variant improves DRIFT/STUCK sequence consistency without changing communication, but it reduces SPIKE F1. This supports the architecture story that CESTA should handle spatial evidence while a lightweight structured decoder can handle temporal label consistency. However, the current gain is far below the preferred +0.03 to +0.04 Q1-level margin, so dense upper-bound tuning remains the priority before communication-efficiency claims.
+The CRF sweep shows that lower CRF strength can improve DRIFT/STUCK sequence consistency without the earlier SPIKE loss: weight `0.05` reached SPIKE F1 `0.9860`, DRIFT `0.8584`, and STUCK `0.8615`. The validation-best setting is weight `0.3`, so dense comparator selection still needs seed replication.
+
+The first request-only Gumbel result retained excellent accuracy but requested almost everything: test macro-F1 `0.9261`, request ratio `0.9722`, and only `2.8%` fewer bits than dense. A stronger penalty sweep produced the first meaningful communication-efficiency evidence: penalty `1e-3` reached macro-F1 `0.9187` with `43.3%` fewer bits, and penalty `1e-2` reached macro-F1 `0.9165` with `67.4%` fewer bits. These are below the dense CRF `0.05` test upper bound (`0.9225`) but remain above the same-split GRU reference (`0.9018`), so request-only Gumbel is currently Pareto-useful rather than merely dense-equivalent.
 
 ## Main risks
 
 1. **Temporal baselines are already strong.** A 3–4 macro-F1 point improvement may require better spatial signal than the current Intel connectivity graph provides.
-2. **Current dense gains are modest.** The best dense result on `Intel_fault15` is about +0.014 macro-F1 over same-split GRU, enough for the minimum target on this ratio but not yet a strong Q1-level margin.
-3. **ST-GCN is too weak to be decisive.** The paper must include stronger dense and rule-based spatial baselines.
-4. **Gate collapse.** Learned requests may become all-on or all-off without careful penalties and temperature/reward schedules.
-5. **Energy accounting ambiguity.** All communication claims must include TX and RX energy, plus measured edge energy when possible.
-6. **Structured decoding tradeoffs.** CRF-style smoothing helps DRIFT/STUCK but can suppress short SPIKE events unless tuned carefully.
-7. **Boundary modeling fragility.** A boundary auxiliary head and simple boundary-gated correction hurt macro-F1 in the current experiment.
-8. **HiFiNet availability.** If HiFiNet is the closest spatial method, it must be reproduced or clearly bounded as unavailable/inapplicable.
+2. **Current dense gains are modest.** The best dense result on `Intel_fault15` is about +0.021 macro-F1 over same-split GRU, enough for the minimum target on this ratio but not yet a strong Q1-level margin.
+3. **Learned gating evidence is single-seed.** The request-only penalty sweep found promising energy/accuracy points, but dense CRF `0.05`, request penalty `1e-3`, and request penalty `1e-2` need multi-seed replication before becoming paper claims.
+4. **ST-GCN is too weak to be decisive.** The paper must include stronger dense and rule-based spatial baselines.
+5. **Gate collapse.** Learned requests may become all-on or all-off without careful penalties and temperature/reward schedules.
+6. **Energy accounting ambiguity.** All communication claims must include TX and RX energy, plus measured edge energy when possible.
+7. **Structured decoding tradeoffs.** CRF-style smoothing helps DRIFT/STUCK and can preserve SPIKE at low weight, but validation/test ordering differs across weights and must be seed-checked.
+8. **Boundary modeling fragility.** A boundary auxiliary head and simple boundary-gated correction hurt macro-F1 in the current experiment.
+9. **HiFiNet availability.** If HiFiNet is the closest spatial method, it must be reproduced or clearly bounded as unavailable/inapplicable.
 
 ## Implementation milestones
 

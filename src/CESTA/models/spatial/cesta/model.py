@@ -52,6 +52,8 @@ class CESTAClassifier(CESTASequenceMixin, CESTACommunicationMixin, BaseModel):
         boundary_hidden_size: int | None = None,
         use_boundary_gated_correction: bool = False,
         use_crf: bool = False,
+        use_communication_conditioned_correction: bool = False,
+        structured_request_topk: int = 0,
     ) -> None:
         super().__init__()
         if input_size % num_nodes != 0:
@@ -76,6 +78,8 @@ class CESTAClassifier(CESTASequenceMixin, CESTACommunicationMixin, BaseModel):
             raise ValueError("boundary_hidden_size must be positive")
         if use_boundary_gated_correction and not use_boundary_head:
             raise ValueError("use_boundary_gated_correction requires use_boundary_head")
+        if structured_request_topk < 0:
+            raise ValueError("structured_request_topk must be non-negative")
 
         self.input_size = input_size
         self.num_nodes = num_nodes
@@ -100,11 +104,16 @@ class CESTAClassifier(CESTASequenceMixin, CESTACommunicationMixin, BaseModel):
         self.boundary_hidden_size = boundary_hidden_size
         self.use_boundary_gated_correction = use_boundary_gated_correction
         self.use_crf = use_crf
+        self.use_communication_conditioned_correction = use_communication_conditioned_correction
+        self.structured_request_topk = structured_request_topk
         self.encoder_output_size = hidden_size * (2 if bidirectional else 1)
         self.neighbor_belief_size = num_classes + 2
 
         self._gate_entropy: torch.Tensor | None = None
         self._last_boundary_logits: torch.Tensor | None = None
+        self._local_logits: torch.Tensor | None = None
+        self._communication_logits: torch.Tensor | None = None
+        self._communication_activity: torch.Tensor | None = None
 
         if num_attention_heads != 1:
             raise NotImplementedError(
@@ -163,6 +172,18 @@ class CESTAClassifier(CESTASequenceMixin, CESTACommunicationMixin, BaseModel):
             nn.Dropout(dropout),
             nn.Linear(gate_hidden_size, 2),
         )
+        self.need_gate = nn.Sequential(
+            nn.Linear(self.encoder_output_size + 2, gate_hidden_size),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(gate_hidden_size, 2),
+        )
+        self.neighbor_ranker = nn.Sequential(
+            nn.Linear(self.encoder_output_size + 3, gate_hidden_size),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(gate_hidden_size, 1),
+        )
         self.classifier = nn.Linear(self.encoder_output_size, num_classes)
         boundary_layer_size = boundary_hidden_size or self.encoder_output_size
         self.boundary_head = nn.Sequential(
@@ -172,6 +193,8 @@ class CESTAClassifier(CESTASequenceMixin, CESTACommunicationMixin, BaseModel):
             nn.Linear(boundary_layer_size, 1),
         )
         correction_input_size = self.encoder_output_size * 3 + self.features_per_node * 3 + num_classes + 2
+        if use_communication_conditioned_correction:
+            correction_input_size += self.neighbor_belief_size * 3
         if use_neighbor_belief:
             correction_input_size += self.neighbor_belief_size * 3
         correction_layer_size = correction_hidden_size or self.encoder_output_size
@@ -221,6 +244,18 @@ class CESTAClassifier(CESTASequenceMixin, CESTACommunicationMixin, BaseModel):
     @property
     def gate_entropy(self) -> torch.Tensor | None:
         return self._gate_entropy
+
+    @property
+    def local_logits(self) -> torch.Tensor | None:
+        return self._local_logits
+
+    @property
+    def communication_logits(self) -> torch.Tensor | None:
+        return self._communication_logits
+
+    @property
+    def communication_activity(self) -> torch.Tensor | None:
+        return self._communication_activity
 
     @property
     def last_boundary_logits(self) -> torch.Tensor | None:
@@ -275,6 +310,7 @@ class CESTAClassifier(CESTASequenceMixin, CESTACommunicationMixin, BaseModel):
                 device=x.device,
             )
             self._communication_loss = self._dense_communication_loss(possible_mask)
+            self._communication_activity = self._receiver_request_activity(possible_mask, possible_mask)
             self._gate_entropy = None
         elif self.communication_mode == "gumbel_request":
             neighbor_context, request_mask, possible_mask, soft_gate_probs = (
@@ -297,23 +333,30 @@ class CESTAClassifier(CESTASequenceMixin, CESTACommunicationMixin, BaseModel):
                 request_mask=request_mask,
                 possible_mask=possible_mask,
             )
+            self._communication_activity = self._receiver_request_activity(request_mask, possible_mask)
             self._gate_entropy = self._compute_gate_entropy(soft_gate_probs)
         else:
             hidden = self.dropout(local_hidden)
             self._last_communication_stats = self._zero_communication_stats()
             self._communication_loss = torch.zeros((), dtype=local_hidden.dtype, device=x.device)
+            self._communication_activity = torch.zeros(batch, seq_len, self.num_nodes, dtype=local_hidden.dtype, device=x.device)
             self._gate_entropy = None
 
         self._last_boundary_logits = self.boundary_head(hidden).squeeze(-1) if self.use_boundary_head else None
+        local_logits = self.classifier(local_hidden)
         logits = self.classifier(hidden)
+        self._local_logits = local_logits
+        self._communication_logits = logits if correction_context is not None else None
         if self.use_logit_correction and correction_context is not None:
             neighbor_context, correction_mask, neighbor_belief_context = correction_context
+            communicated_logits = self._communication_logits if self.use_communication_conditioned_correction else None
             correction_delta = self._logit_correction(
                 local_hidden=local_hidden,
                 neighbor_context=neighbor_context,
                 node_features=node_features,
                 mask=correction_mask,
                 local_logits=logits,
+                communicated_logits=communicated_logits,
                 neighbor_belief_context=neighbor_belief_context,
             )
             if self.use_boundary_gated_correction and self._last_boundary_logits is not None:
@@ -348,6 +391,8 @@ class CESTAClassifier(CESTASequenceMixin, CESTACommunicationMixin, BaseModel):
             "boundary_hidden_size": self.boundary_hidden_size,
             "use_boundary_gated_correction": self.use_boundary_gated_correction,
             "use_crf": self.use_crf,
+            "use_communication_conditioned_correction": self.use_communication_conditioned_correction,
+            "structured_request_topk": self.structured_request_topk,
         }
 
     @classmethod
@@ -393,6 +438,8 @@ class CESTAClassifier(CESTASequenceMixin, CESTACommunicationMixin, BaseModel):
             ),
             use_boundary_gated_correction=bool(config.get("use_boundary_gated_correction", False)),
             use_crf=bool(config.get("use_crf", False)),
+            use_communication_conditioned_correction=bool(config.get("use_communication_conditioned_correction", False)),
+            structured_request_topk=int(config.get("structured_request_topk", 0)),
         )
         model.load_state_dict(torch.load(directory / "weight.pt", weights_only=True))
         return model

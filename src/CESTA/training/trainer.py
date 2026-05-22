@@ -402,6 +402,8 @@ class Trainer:
 
             loss = masked_loss(criterion, logits, y_batch, node_mask)
             loss = self._add_auxiliary_loss(model, loss)
+            loss = self._add_voi_gate_loss(model, loss, y_batch, node_mask)
+            loss = self._add_counterfactual_voi_loss(model, loss, y_batch, node_mask)
             loss = self._add_boundary_loss(model, loss, y_batch, node_mask)
             loss = self._add_crf_loss(model, loss, logits, y_batch, node_mask)
             loss.backward()
@@ -444,6 +446,67 @@ class Trainer:
                 loss = loss - entropy_weight * gate_entropy
 
         return loss
+
+    def _add_voi_gate_loss(
+        self,
+        model: BaseModel,
+        loss: torch.Tensor,
+        targets: torch.Tensor,
+        node_mask: torch.Tensor | None,
+    ) -> torch.Tensor:
+        weight = self.config.voi_gate_loss_weight
+        if weight <= 0.0:
+            return loss
+        local_logits = getattr(model, "local_logits", None)
+        communication_logits = getattr(model, "communication_logits", None)
+        communication_loss = getattr(model, "communication_loss", None)
+        if not isinstance(local_logits, torch.Tensor) or not isinstance(communication_logits, torch.Tensor):
+            return loss
+        if not isinstance(communication_loss, torch.Tensor):
+            return loss
+        valid = targets >= 0
+        if node_mask is not None:
+            valid = valid & node_mask
+        if not bool(valid.any()):
+            return loss
+        safe_targets = targets.clamp_min(0).unsqueeze(-1)
+        local_correct_logits = local_logits.gather(-1, safe_targets).squeeze(-1)
+        communication_correct_logits = communication_logits.gather(-1, safe_targets).squeeze(-1)
+        improvement = communication_correct_logits - local_correct_logits
+        no_improvement = torch.relu(-improvement[valid]).mean()
+        return loss + weight * communication_loss * no_improvement
+
+    def _add_counterfactual_voi_loss(
+        self,
+        model: BaseModel,
+        loss: torch.Tensor,
+        targets: torch.Tensor,
+        node_mask: torch.Tensor | None,
+    ) -> torch.Tensor:
+        weight = self.config.counterfactual_voi_loss_weight
+        if weight <= 0.0:
+            return loss
+        local_logits = getattr(model, "local_logits", None)
+        communication_logits = getattr(model, "communication_logits", None)
+        communication_activity = getattr(model, "communication_activity", None)
+        if not isinstance(local_logits, torch.Tensor) or not isinstance(communication_logits, torch.Tensor):
+            return loss
+        if not isinstance(communication_activity, torch.Tensor):
+            return loss
+        valid = targets >= 0
+        if node_mask is not None:
+            valid = valid & node_mask
+        if not bool(valid.any()):
+            return loss
+        safe_targets = targets.clamp_min(0).unsqueeze(-1)
+        local_correct_logits = local_logits.gather(-1, safe_targets).squeeze(-1)
+        communication_correct_logits = communication_logits.gather(-1, safe_targets).squeeze(-1)
+        improvement = communication_correct_logits - local_correct_logits
+        harmful = torch.relu(-improvement)
+        useful = torch.relu(improvement).detach()
+        active = communication_activity.clamp(0.0, 1.0)
+        penalty = active * (harmful * self.config.counterfactual_voi_penalty_weight - useful)
+        return loss + weight * penalty[valid].mean()
 
     def _add_boundary_loss(
         self,

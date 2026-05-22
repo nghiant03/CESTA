@@ -17,6 +17,7 @@ from CESTA.optimization.search_spaces import (
 )
 from CESTA.schema import OptimizeConfig, TrainConfig
 from CESTA.schema.fault import FaultType
+from CESTA.seed import seed_everything
 from CESTA.training import LoggingCallback, Trainer, TrainingCallback
 from CESTA.training.callbacks import TrainMetrics
 
@@ -158,6 +159,7 @@ class Optimizer:
             model_kwargs=model_kwargs,
             **train_overrides,
         )
+        seed_everything(train_cfg.seed)
 
         net = create_model(
             self.config.model,

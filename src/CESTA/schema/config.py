@@ -95,6 +95,9 @@ class TrainConfig(BaseModel):
         target_request_ratio: Target active request ratio for budget_hinge mode.
         gate_entropy_weight: Weight for gate entropy regularization (0 = disabled).
             Positive weight encourages higher gate entropy to prevent collapse to all-zero.
+        voi_gate_loss_weight: Weight for value-of-information gate loss (0 = disabled).
+        counterfactual_voi_loss_weight: Weight for per-node counterfactual VOI loss (0 = disabled).
+        counterfactual_voi_penalty_weight: Extra penalty for harmful communication under per-node VOI.
         boundary_loss_weight: Weight for boundary/change-point auxiliary loss (0 = disabled).
         boundary_focal_gamma: Focusing parameter for focal BCE boundary loss.
         boundary_positive_weight: Optional positive-class weight for sparse boundary labels.
@@ -128,6 +131,9 @@ class TrainConfig(BaseModel):
     communication_penalty_mode: str = Field(default="linear", pattern=r"^(linear|budget_hinge)$")
     target_request_ratio: float = Field(default=0.3, ge=0.0, le=1.0)
     gate_entropy_weight: float = Field(default=0.0, ge=0.0)
+    voi_gate_loss_weight: float = Field(default=0.0, ge=0.0)
+    counterfactual_voi_loss_weight: float = Field(default=0.0, ge=0.0)
+    counterfactual_voi_penalty_weight: float = Field(default=1.0, ge=0.0)
     boundary_loss_weight: float = Field(default=0.0, ge=0.0)
     boundary_focal_gamma: float = Field(default=2.0, ge=0.0)
     boundary_positive_weight: float | None = Field(default=None, gt=0.0)

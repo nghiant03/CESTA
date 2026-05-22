@@ -18,6 +18,8 @@ class CommunicationStats(TypedDict):
 
 class CESTACommunicationMixin:
     request_gate: Any
+    need_gate: Any
+    neighbor_ranker: Any
     training: bool
     gumbel_temperature: float
     W_q: Any
@@ -33,6 +35,8 @@ class CESTACommunicationMixin:
     encoder_output_size: int
     neighbor_belief_size: int
     use_neighbor_belief: bool
+    use_communication_conditioned_correction: bool
+    structured_request_topk: int
 
     def _dense_neighbor_context(
         self,
@@ -54,28 +58,72 @@ class CESTACommunicationMixin:
         possible_mask = self._possible_message_mask(
             local_hidden, edge_index=edge_index, edge_mask=edge_mask
         )
-        edge_features = self._edge_gate_features(
-            local_hidden, possible_mask, edge_index=edge_index
-        )
-        gate_logits = self.request_gate(edge_features)
+        if self.structured_request_topk > 0:
+            request_mask, soft_gate_probs = self._structured_request_mask(local_hidden, possible_mask)
+        else:
+            edge_features = self._edge_gate_features(
+                local_hidden, possible_mask, edge_index=edge_index
+            )
+            gate_logits = self.request_gate(edge_features)
 
-        soft_gate_probs = F.softmax(gate_logits, dim=-1)
+            soft_gate_probs = F.softmax(gate_logits, dim=-1)
 
+            if self.training:
+                gate_probs = F.gumbel_softmax(
+                    gate_logits,
+                    tau=self.gumbel_temperature,
+                    hard=True,
+                    dim=-1,
+                )
+            else:
+                gate_probs = F.one_hot(gate_logits.argmax(dim=-1), num_classes=2).to(
+                    local_hidden.dtype
+                )
+
+            request_mask = gate_probs[..., 1] * possible_mask
+        neighbor_context = self._gat_aggregate(local_hidden, request_mask)
+        return neighbor_context, request_mask, possible_mask, soft_gate_probs
+
+    def _structured_request_mask(
+        self,
+        local_hidden: torch.Tensor,
+        possible_mask: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        B, T, N, H = local_hidden.shape
+        local_belief = self._belief_features(self.classifier(local_hidden))
+        entropy = local_belief[..., self.num_classes : self.num_classes + 1]
+        margin = local_belief[..., self.num_classes + 1 : self.num_classes + 2]
+        need_features = torch.cat([local_hidden, entropy, margin], dim=-1)
+        need_logits = self.need_gate(need_features)
+        soft_need_probs = F.softmax(need_logits, dim=-1)
         if self.training:
-            gate_probs = F.gumbel_softmax(
-                gate_logits,
+            need = F.gumbel_softmax(
+                need_logits,
                 tau=self.gumbel_temperature,
                 hard=True,
                 dim=-1,
-            )
+            )[..., 1]
         else:
-            gate_probs = F.one_hot(gate_logits.argmax(dim=-1), num_classes=2).to(
-                local_hidden.dtype
-            )
+            need = (need_logits.argmax(dim=-1) == 1).to(local_hidden.dtype)
 
-        request_mask = gate_probs[..., 1] * possible_mask
-        neighbor_context = self._gat_aggregate(local_hidden, request_mask)
-        return neighbor_context, request_mask, possible_mask, soft_gate_probs
+        receiver_state = local_hidden.unsqueeze(3).expand(B, T, N, N, H)
+        receiver_entropy = entropy.unsqueeze(3).expand(B, T, N, N, 1)
+        receiver_margin = margin.unsqueeze(3).expand(B, T, N, N, 1)
+        edge_prob = cast(torch.Tensor, self.edge_prob).to(device=local_hidden.device, dtype=local_hidden.dtype)
+        edge_prob_features = edge_prob.view(1, 1, N, N, 1).expand(B, T, N, N, 1)
+        ranker_input = torch.cat([receiver_state, receiver_entropy, receiver_margin, edge_prob_features], dim=-1) * possible_mask.unsqueeze(-1)
+        scores = self.neighbor_ranker(ranker_input).squeeze(-1)
+        scores = scores.masked_fill(possible_mask == 0, float("-inf"))
+        k = min(self.structured_request_topk, N)
+        topk_idx = scores.topk(k=k, dim=-1).indices
+        topk_mask = torch.zeros_like(possible_mask)
+        topk_mask.scatter_(-1, topk_idx, 1.0)
+        topk_mask = topk_mask * possible_mask
+        request_mask = need.unsqueeze(-1) * topk_mask
+        no_request_prob = 1.0 - soft_need_probs[..., 1].unsqueeze(-1) * topk_mask
+        request_prob = soft_need_probs[..., 1].unsqueeze(-1) * topk_mask
+        soft_gate_probs = torch.stack([no_request_prob, request_prob], dim=-1)
+        return request_mask, soft_gate_probs
 
     def _gat_aggregate(
         self,
@@ -153,6 +201,7 @@ class CESTACommunicationMixin:
         node_features: torch.Tensor,
         mask: torch.Tensor,
         local_logits: torch.Tensor,
+        communicated_logits: torch.Tensor | None = None,
         neighbor_belief_context: torch.Tensor | None = None,
     ) -> torch.Tensor:
         neighbor_features = self._masked_neighbor_mean(node_features, mask)
@@ -166,6 +215,15 @@ class CESTACommunicationMixin:
             node_features - neighbor_features,
             local_belief,
         ]
+        if communicated_logits is not None:
+            communicated_belief = self._belief_features(communicated_logits)
+            correction_input_parts.extend(
+                [
+                    communicated_belief,
+                    communicated_belief - local_belief,
+                    communicated_belief * local_belief,
+                ]
+            )
         if neighbor_belief_context is not None:
             correction_input_parts.extend(
                 [
@@ -286,6 +344,14 @@ class CESTACommunicationMixin:
     ) -> torch.Tensor:
         possible_edges = possible_mask.sum().clamp_min(1.0)
         return request_mask.sum() / possible_edges
+
+    @staticmethod
+    def _receiver_request_activity(
+        request_mask: torch.Tensor,
+        possible_mask: torch.Tensor,
+    ) -> torch.Tensor:
+        possible_count = possible_mask.sum(dim=-1).clamp_min(1.0)
+        return request_mask.sum(dim=-1) / possible_count
 
     @staticmethod
     def _dense_communication_loss(possible_mask: torch.Tensor) -> torch.Tensor:
