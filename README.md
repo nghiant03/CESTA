@@ -1,26 +1,41 @@
-# CESTA: Communication-Efficient Spatial-Temporal Aggregation
+# CESTA
 
-## Overview
+**Communication-Efficient Spatial-Temporal Aggregation for sensor fault diagnosis.**
 
-A research framework for **sensor fault diagnosis** using deep learning on time-series data. Supports Markov-chain fault injection, temporal and spatio-temporal models, and end-to-end experiment pipelines — from raw sensor readings to evaluated classifiers.
+CESTA is a research codebase for studying communication-aware fault diagnosis in sensor networks. It provides a reproducible pipeline for fault injection, graph-aware dataset preparation, temporal and spatial-temporal model training, communication-cost evaluation, and run artifact reporting.
 
-## Features
+The current research focus is a receiver-side learned request mechanism: each sensor node first reasons from local temporal evidence, then selectively requests neighbor information over existing graph edges when communication is expected to improve diagnosis.
 
-- **Markov-chain fault injection** — Simulates realistic sensor faults (spike, drift, stuck) with configurable transition probabilities and durations
-- **Temporal models** — CNN1D, LSTM, GRU, Transformer, Autoformer, Informer, PatchTST, ModernTCN
-- **Spatio-temporal models** — ST-GCN and CESTA with graph-based sensor topology, dynamic edge masks, and per-node classification
-- **Focal loss & oversampling** — Handles class imbalance common in fault diagnosis datasets
-- **Optuna hyperparameter optimization** — Automated sweep with configurable trials and storage
-- **ESP32-S3 firmware** — Rust firmware for real-world DHT11 sensor data collection via MQTT; see [`firmware/README.md`](firmware/README.md)
+## Research aim
 
-## Getting Started
+Dense spatial-temporal models can improve diagnosis by sharing neighbor context, but they often assume all graph communication is always available and free. CESTA targets the harder edge-oriented setting where radio communication is costly, dynamic, and should be justified by diagnostic value.
+
+The main experimental question is:
+
+> Can selective receiver-side communication exceed strong temporal-only macro-F1 while reducing communication energy relative to dense spatial message passing?
+
+See [`docs/PROPOSAL.md`](docs/PROPOSAL.md) and [`docs/EXPERIMENT.md`](docs/EXPERIMENT.md) for the research motivation, hypotheses, baselines, current diagnosis results, and planned ablations.
+
+## Highlights
+
+- Markov-chain injection of realistic sensor faults: `SPIKE`, `DRIFT`, and `STUCK`.
+- Temporal baselines: CNN1D, LSTM, GRU, Transformer, Autoformer, Informer, PatchTST, and ModernTCN.
+- Spatial-temporal baselines: ST-GCN and dense CESTA over graph-prepared datasets.
+- Communication-aware CESTA with receiver-side Gumbel request gating, optional neighbor belief messages, communication-conditioned correction, VOI-style objectives, and CRF sequence decoding.
+- Dynamic graph preparation from Intel connectivity data, including graph-aligned windows, node masks, edge masks, and per-node labels.
+- Reproducible run artifacts: manifests, configs, checkpoints, histories, evaluation metrics, predictions, and communication metrics.
+- Optuna hyperparameter optimization and run-report aggregation.
+- Optional ESP32-S3 Rust firmware for lab sensor collection over MQTT.
+
+## Installation
 
 ### Requirements
 
-- Python >= 3.11
-- [uv](https://docs.astral.sh/uv/) for environment management
+- Python 3.11 or newer
+- [`uv`](https://docs.astral.sh/uv/) for environment management
+- CUDA-compatible PyTorch is configured through `pyproject.toml` via the PyTorch CUDA 12.4 index
 
-### Installation
+### Setup
 
 ```bash
 git clone https://github.com/Sinner/CESTA.git
@@ -28,115 +43,168 @@ cd CESTA
 uv sync
 ```
 
-### Usage
+Verify the CLI:
 
 ```bash
-# 1. Inject faults into raw sensor data
+uv run cesta --help
+uv run cesta list models
+uv run cesta list datasets
+```
+
+## Quick start
+
+The standard workflow is fault injection, optional graph preparation, training, evaluation, and reporting.
+
+```bash
+# 1. Inject faults into raw Intel sensor data
 uv run cesta inject intel_lab data/raw/Intel/data.txt data/injected/intel_lab
 
-# 2. (Optional) Add graph topology for spatio-temporal models
+# 2. Add graph topology for spatial-temporal models
 uv run cesta prepare graph data/injected/intel_lab data/raw/Intel/connectivity.txt
 
-# 3. Train a model
-uv run cesta train config/model/lstm.yaml data/injected/intel_lab
+# 3. Train a temporal baseline
+uv run cesta train config/model/gru.yaml data/injected/intel_lab
 
-# 4. Evaluate
-uv run cesta evaluate --model runs/lstm/<run_id> --data data/injected/intel_lab
+# 4. Train CESTA
+uv run cesta train config/model/cesta.yaml data/injected/intel_lab
 
-# 5. (Optional) Hyperparameter optimization
-uv run cesta optimize --data data/injected/intel_lab --n-trials 100
+# 5. Evaluate a run
+uv run cesta evaluate --model runs/cesta/<run_id> --data data/injected/intel_lab
+
+# 6. Compare completed runs
+uv run cesta report compare runs
 ```
 
-## Project Structure
+Diagnosis-focused configurations live under `config/model/diagnosis/` and encode the current higher-end research settings for dense, request-gated, residual, and capacity-matched CESTA variants.
 
-```
-src/CESTA/
-├── schema/            # Pydantic config models
-├── cli/               # Typer CLI (inject, prepare, train, evaluate, optimize)
-├── injection/         # Markov generator, fault injectors, registry
-├── datasets/
-│   ├── raw/           # Dataset loaders: IntelLab, ESP32-DHT11, registry
-│   └── injected/      # InjectedDataset, GraphDataset, windowing
-├── models/
-│   ├── temporal/      # CNN1D, LSTM, GRU, Transformer, Autoformer, Informer, PatchTST, ModernTCN
-│   └── spatial/       # ST-GCN, CESTA
-├── training/          # Trainer, focal loss, oversampling, callbacks
-├── evaluation/        # Metrics, evaluator
-├── optimization/      # Optuna sweep
-└── seed.py            # Reproducibility utility
+## Data pipeline
 
-firmware/              # ESP32-S3 Rust firmware (esp-idf-hal)
-config/                # YAML config files per model
-data/                  # Raw datasets and injected outputs
-```
+CESTA separates the data lifecycle into raw datasets and injected datasets.
 
-## CLI
+1. Raw loaders normalize source data into a common sensor-time table.
+2. Fault injection adds synthetic labels and corrupted readings using configurable Markov transitions.
+3. Graph preparation attaches topology and dynamic communication metadata.
+4. Window preparation produces chronological train/validation/test splits for temporal or graph-aligned training.
 
-```
-cesta
-├── inject              # Run fault injection on a dataset
-├── prepare
-│   └── graph           # Add graph topology to injected dataset
-├── train               # Train a model
-├── evaluate            # Evaluate a trained model
-├── optimize            # Run Optuna hyperparameter optimization
-│   └── show            # Display study results
-├── report              # Aggregate run artifacts into comparison reports
-└── list                # List datasets, models, metrics, or runs
-```
+Graph models receive per-window tensors with node masks and edge masks, so missing node readings and unavailable communication links can be handled without requiring complete-case timestamps.
 
-Run `uv run cesta --help` for full options.
+## Models
 
-## Fault Types
+| Family | Models | Notes |
+|---|---|---|
+| Temporal | `cnn1d`, `lstm`, `gru`, `transformer`, `autoformer`, `informer`, `patchtst`, `modern_tcn` | Strong local-only baselines for fault diagnosis. |
+| Spatial-temporal | `stgcn`, `cesta` | Require graph metadata from `prepare graph`. |
+| Communication-aware | `cesta` | Supports dense, no-communication, and receiver-side Gumbel request modes. |
 
-| Fault   | Description                                      |
-|---------|--------------------------------------------------|
-| Normal  | No fault — clean sensor reading                  |
-| Spike   | Sudden transient deviation from true value       |
-| Drift   | Gradual cumulative offset over time              |
-| Stuck   | Sensor output frozen at a constant value         |
-
-Fault sequences are generated via a **Markov chain** with configurable transition probabilities and per-fault duration distributions.
+CESTA can be configured with graph residual fusion, learned request gates, communication penalties, neighbor belief features, boundary supervision, communication-conditioned correction, structured top-k requests, VOI-style gate loss, and CRF decoding.
 
 ## Configuration
 
-Training configs are YAML files in `config/model/`:
+Training is config-file-first. Model, optimizer, data-window, split, loss, and communication settings are stored in YAML and validated by Pydantic.
 
 ```bash
 uv run cesta train config/model/lstm.yaml data/injected/intel_lab
+uv run cesta train config/model/diagnosis/cesta_diag_70_15_15_dense.yaml data/injected/Intel_fault15
 ```
 
-Large command surfaces use config files validated directly by Pydantic. Small utility commands define direct CLI defaults.
+Large command surfaces use YAML or JSON config files; smaller utility commands keep direct CLI options. This keeps experiment settings reproducible and avoids hidden command-line state.
 
-## Firmware
+## Run artifacts
 
-See [`firmware/README.md`](firmware/README.md) for firmware requirements, configuration, usage, MQTT payload format, and deployment notes.
+Each training invocation creates a new run directory and never overwrites previous runs.
+
+```text
+runs/<model>/<utc_ts>_<model>_seed<seed>_<shortsha>/
+├── weight.pt
+├── config.json
+├── history.jsonl
+├── manifest.json
+├── eval_metrics.json
+└── predictions.npz
+```
+
+Communication-aware models also write communication metrics during evaluation when available.
+
+## CLI overview
+
+```text
+cesta
+├── inject              # Inject faults into raw sensor data
+├── prepare
+│   └── graph           # Attach graph topology and communication metadata
+├── train               # Train from a YAML/JSON config
+├── evaluate            # Evaluate a trained run
+├── optimize            # Run Optuna hyperparameter search
+│   └── show            # Display study results
+├── report              # Aggregate and compare run artifacts
+└── list                # List datasets, models, metrics, or runs
+```
+
+Run `uv run cesta <command> --help` for command-specific options.
+
+## Project structure
+
+```text
+src/CESTA/
+├── schema/            # Pydantic configs and manifest schemas
+├── batch.py           # Runtime batch contracts
+├── artifacts.py       # Run artifact and checkpoint helpers
+├── workflows/         # Reusable train/evaluate orchestration
+├── cli/               # Typer CLI
+├── injection/         # Markov generator and fault injectors
+├── datasets/          # Raw and injected dataset handling
+├── models/            # Temporal, spatial, and CESTA model definitions
+├── training/          # Trainer, losses, callbacks, objectives
+├── evaluation/        # Metrics, evaluator, communication reporting
+├── optimization/      # Optuna search spaces and optimizer
+├── utils.py           # Runtime helpers
+└── seed.py            # Reproducibility helper
+
+config/                # Model and diagnosis YAML configs
+docs/                  # Proposal, experiment plan, and research notes
+firmware/              # ESP32-S3 Rust firmware for optional data collection
+notebooks/             # Analysis notebooks
+runs/                  # Generated experiment artifacts
+```
 
 ## Development
 
+Use the project tools through `uv`.
+
 ```bash
-uv run ruff check src/          # Lint
-uv run ruff format src/         # Format
-uv run pyright src/             # Type check
+uv run ruff check src/CESTA
+uv run ruff format src/CESTA
+uv run pyright src/CESTA
 ```
 
-## Extension
+After code changes, run the most targeted validation first, then broaden to ruff and pyright when appropriate.
 
-### Add a new dataset
+## Firmware
 
-1. Subclass `BaseDataset` in `src/CESTA/datasets/raw/`
-2. Implement `name`, `feature_columns`, `group_column`, `timestamp_column`, `load()`, `preprocess()`
-3. Add it to `_DATASET_LOADERS` in `datasets/raw/__init__.py`
+The optional firmware stack targets ESP32-S3 devices collecting DHT11 readings and publishing JSON payloads over MQTT. See [`firmware/README.md`](firmware/README.md) for build, flash, MQTT, and lab deployment details.
 
-### Add a new fault type
+## Extension points
 
-1. Add value to `FaultType` enum in `schema/types.py`
-2. Create injector in `injection/faults.py` subclassing `BaseFaultInjector`
-3. Register in `injection/registry.py`
-4. Add default config in `MarkovConfig._default_fault_configs()`
+### Add a dataset
 
-### Add a new model
+1. Implement a `BaseDataset` subclass in `src/CESTA/datasets/raw/`.
+2. Define `name`, feature columns, grouping, timestamp handling, loading, and preprocessing.
+3. Register it in `src/CESTA/datasets/raw/__init__.py`.
 
-1. Subclass `BaseModel` in `models/temporal/` or `models/spatial/`
-2. Set `required_metadata` class variable if the model needs graph or other metadata
-3. Register in `models/registry.py`
+### Add a fault type
+
+1. Add the enum value in `src/CESTA/schema/fault.py`.
+2. Implement an injector in `src/CESTA/injection/faults.py`.
+3. Register it in `src/CESTA/injection/registry.py`.
+4. Add default Markov settings in `MarkovConfig._default_fault_configs()` if it should be part of the standard injection profile.
+
+### Add a model
+
+1. Implement a `BaseModel` subclass under `src/CESTA/models/temporal/` or `src/CESTA/models/spatial/`.
+2. Declare required metadata such as `graph` or `node_identity` when needed.
+3. Add metadata extraction logic in `src/CESTA/models/registry.py` if the constructor needs dataset metadata.
+4. Register the model in `src/CESTA/models/registry.py`.
+
+## Repository status
+
+This is an active research repository. APIs and experiment settings may change as hypotheses are tested. Treat `docs/PROPOSAL.md`, `docs/EXPERIMENT.md`, and checked-in configs as the canonical references for current research intent and experimental protocol.
