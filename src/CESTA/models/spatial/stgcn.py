@@ -290,22 +290,8 @@ class STGCNClassifier(BaseModel):
 
     @classmethod
     def from_checkpoint(cls, path: str | Path) -> STGCNClassifier:
-        """Load model from a saved directory."""
-        directory = Path(path)
-        meta = BaseModel.load_metadata(directory)
-        config = meta["model_config"]
-        assert isinstance(config, dict)
-        model = cls(
-            input_size=int(config["input_size"]),
-            num_nodes=int(config["num_nodes"]),
-            adjacency=config.get("adjacency"),  # type: ignore[arg-type]
-            st_hidden=int(config.get("st_hidden", 64)),
-            num_st_blocks=int(config.get("num_st_blocks", 2)),
-            temporal_kernel=int(config.get("temporal_kernel", 3)),
-            num_classes=int(config["num_classes"]),
-            dropout=float(config.get("dropout", 0.2)),
-        )
-        model.load_state_dict(
-            torch.load(directory / "weight.pt", weights_only=True)
-        )
+        from CESTA.artifacts import load_checkpoint
+
+        model = load_checkpoint(path)
+        assert isinstance(model, cls)
         return model

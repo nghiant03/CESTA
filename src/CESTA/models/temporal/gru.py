@@ -120,29 +120,8 @@ class GRUClassifier(BaseModel):
 
     @classmethod
     def from_checkpoint(cls, path: str | Path) -> "GRUClassifier":
-        """Load model from a saved directory.
+        from CESTA.artifacts import load_checkpoint
 
-        Args:
-            path: Path to the model directory.
-
-        Returns:
-            Loaded GRUClassifier instance.
-        """
-        directory = Path(path)
-        meta = BaseModel.load_metadata(directory)
-        config = meta["model_config"]
-        assert isinstance(config, dict)
-        model = cls(
-            input_size=int(config["input_size"]),
-            hidden_size=int(config["hidden_size"]),
-            num_layers=int(config["num_layers"]),
-            num_classes=int(config["num_classes"]),
-            dropout=float(config["dropout"]),
-            bidirectional=bool(config["bidirectional"]),
-            num_nodes=int(config["num_nodes"]) if config.get("num_nodes") is not None else None,
-            node_embedding_dim=int(config.get("node_embedding_dim", 0)),
-        )
-        model.load_state_dict(
-            torch.load(directory / "weight.pt", weights_only=True)
-        )
+        model = load_checkpoint(path)
+        assert isinstance(model, cls)
         return model

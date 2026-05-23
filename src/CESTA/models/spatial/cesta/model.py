@@ -397,49 +397,8 @@ class CESTAClassifier(CESTASequenceMixin, CESTACommunicationMixin, BaseModel):
 
     @classmethod
     def from_checkpoint(cls, path: str | Path) -> CESTAClassifier:
-        directory = Path(path)
-        meta = BaseModel.load_metadata(directory)
-        config = meta["model_config"]
-        assert isinstance(config, dict)
-        model = cls(
-            input_size=int(config["input_size"]),
-            num_nodes=int(config["num_nodes"]),
-            adjacency=config.get("adjacency"),  # type: ignore[arg-type]
-            edge_prob=config.get("edge_prob"),  # type: ignore[arg-type]
-            hidden_size=int(config.get("hidden_size", 64)),
-            num_layers=int(config.get("num_layers", 1)),
-            num_classes=int(config["num_classes"]),
-            dropout=float(config.get("dropout", 0.2)),
-            communication_mode=config.get("communication_mode", "none"),  # type: ignore[arg-type]
-            fusion_hidden_size=(
-                int(config["fusion_hidden_size"])
-                if config.get("fusion_hidden_size") is not None
-                else None
-            ),
-            precision_bits=int(config.get("precision_bits", 32)),
-            gumbel_temperature=float(config.get("gumbel_temperature", 1.0)),
-            gate_hidden_size=int(config.get("gate_hidden_size", 32)),
-            num_attention_heads=int(config.get("num_attention_heads", 1)),
-            graph_residual_init=float(config.get("graph_residual_init", 1.0)),
-            bidirectional=bool(config.get("bidirectional", False)),
-            use_logit_correction=bool(config.get("use_logit_correction", False)),
-            correction_hidden_size=(
-                int(config["correction_hidden_size"])
-                if config.get("correction_hidden_size") is not None
-                else None
-            ),
-            correction_init=float(config.get("correction_init", 0.1)),
-            use_neighbor_belief=bool(config.get("use_neighbor_belief", False)),
-            use_boundary_head=bool(config.get("use_boundary_head", False)),
-            boundary_hidden_size=(
-                int(config["boundary_hidden_size"])
-                if config.get("boundary_hidden_size") is not None
-                else None
-            ),
-            use_boundary_gated_correction=bool(config.get("use_boundary_gated_correction", False)),
-            use_crf=bool(config.get("use_crf", False)),
-            use_communication_conditioned_correction=bool(config.get("use_communication_conditioned_correction", False)),
-            structured_request_topk=int(config.get("structured_request_topk", 0)),
-        )
-        model.load_state_dict(torch.load(directory / "weight.pt", weights_only=True))
+        from CESTA.artifacts import load_checkpoint
+
+        model = load_checkpoint(path)
+        assert isinstance(model, cls)
         return model

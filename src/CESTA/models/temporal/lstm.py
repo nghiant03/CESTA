@@ -95,27 +95,8 @@ class LSTMClassifier(BaseModel):
 
     @classmethod
     def from_checkpoint(cls, path: str | Path) -> "LSTMClassifier":
-        """Load model from a saved directory.
+        from CESTA.artifacts import load_checkpoint
 
-        Args:
-            path: Path to the model directory.
-
-        Returns:
-            Loaded LSTMClassifier instance.
-        """
-        directory = Path(path)
-        meta = BaseModel.load_metadata(directory)
-        config = meta["model_config"]
-        assert isinstance(config, dict)
-        model = cls(
-            input_size=int(config["input_size"]),
-            hidden_size=int(config["hidden_size"]),
-            num_layers=int(config["num_layers"]),
-            num_classes=int(config["num_classes"]),
-            dropout=float(config["dropout"]),
-            bidirectional=bool(config["bidirectional"]),
-        )
-        model.load_state_dict(
-            torch.load(directory / "weight.pt", weights_only=True)
-        )
+        model = load_checkpoint(path)
+        assert isinstance(model, cls)
         return model

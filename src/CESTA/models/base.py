@@ -6,7 +6,6 @@ the required abstract methods.
 
 from __future__ import annotations
 
-import json
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import ClassVar
@@ -74,18 +73,9 @@ class BaseModel(nn.Module, ABC):
             path: Directory path to save the model into.
             config_dict: Optional training config to embed alongside model config.
         """
-        directory = Path(path)
-        directory.mkdir(parents=True, exist_ok=True)
+        from CESTA.artifacts import save_checkpoint
 
-        torch.save(self.state_dict(), directory / "weight.pt")
-
-        meta: dict[str, object] = {
-            "model_name": self.name,
-            "model_config": self.get_config(),
-        }
-        if config_dict is not None:
-            meta["train_config"] = config_dict
-        (directory / "config.json").write_text(json.dumps(meta, indent=2))
+        save_checkpoint(self, path, config_dict=config_dict)
 
     @staticmethod
     def load_config(path: str | Path) -> dict[str, object] | None:
@@ -97,11 +87,11 @@ class BaseModel(nn.Module, ABC):
         Returns:
             Training config dictionary if present, None otherwise.
         """
-        config_path = Path(path) / "config.json"
-        if not config_path.exists():
+        from CESTA.artifacts import checkpoint_metadata_path, load_checkpoint_train_config
+
+        if not checkpoint_metadata_path(path).exists():
             return None
-        meta = json.loads(config_path.read_text())
-        return meta.get("train_config")  # type: ignore[no-any-return]
+        return load_checkpoint_train_config(path)
 
     @staticmethod
     def load_metadata(path: str | Path) -> dict[str, object]:
@@ -113,5 +103,6 @@ class BaseModel(nn.Module, ABC):
         Returns:
             Full metadata dictionary.
         """
-        config_path = Path(path) / "config.json"
-        return json.loads(config_path.read_text())  # type: ignore[no-any-return]
+        from CESTA.artifacts import load_checkpoint_metadata
+
+        return load_checkpoint_metadata(path)

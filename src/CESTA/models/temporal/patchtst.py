@@ -152,31 +152,8 @@ class PatchTSTClassifier(BaseModel):
 
     @classmethod
     def from_checkpoint(cls, path: str | Path) -> PatchTSTClassifier:
-        """Load model from a saved directory.
+        from CESTA.artifacts import load_checkpoint
 
-        Args:
-            path: Path to the model directory.
-
-        Returns:
-            Loaded PatchTSTClassifier instance.
-        """
-        directory = Path(path)
-        meta = BaseModel.load_metadata(directory)
-        config = meta["model_config"]
-        assert isinstance(config, dict)
-        model = cls(
-            input_size=int(config["input_size"]),
-            d_model=int(config["d_model"]),
-            num_layers=int(config["num_layers"]),
-            num_classes=int(config["num_classes"]),
-            n_heads=int(config["n_heads"]),
-            d_ff=int(config["d_ff"]),
-            patch_length=int(config["patch_length"]),
-            patch_stride=int(config["patch_stride"]),
-            max_len=int(config["max_len"]),
-            dropout=float(config["dropout"]),
-        )
-        model.load_state_dict(
-            torch.load(directory / "weight.pt", weights_only=True)
-        )
+        model = load_checkpoint(path)
+        assert isinstance(model, cls)
         return model

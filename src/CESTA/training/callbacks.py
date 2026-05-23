@@ -180,12 +180,14 @@ class CheckpointCallback(TrainingCallback):
         )
 
     def on_epoch_end(self, metrics: TrainMetrics, model: BaseModel) -> bool:
+        from CESTA.artifacts import save_checkpoint
+
         value = self._metric_value(metrics)
 
         improved = value > self._best if self._direction_maximize else value < self._best
         if improved:
             self._best = value
-            model.save(self.save_path, config_dict=self.config_dict)
+            save_checkpoint(model, self.save_path, config_dict=self.config_dict)
             logger.info("Saved checkpoint to {} ({}={:.4f})", self.save_path, self.monitor, value)
         return True
 

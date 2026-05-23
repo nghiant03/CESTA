@@ -25,6 +25,8 @@ This repository is a research project for fault diagnosis analysis.
 src/CESTA/
 ├── schema/            # Pydantic config and manifest schemas split by domain
 ├── batch.py           # Runtime batch contracts shared by training/evaluation/spatial models
+├── artifacts.py       # Cross-layer run artifact, manifest, and checkpoint helpers
+├── workflows/         # Reusable train/evaluate orchestration above domain packages, below CLI
 ├── cli/               # Typer CLI with subcommands (inject, prepare, train, evaluate)
 ├── injection/         # Fault injection: Markov generator, fault injectors, registry
 ├── datasets/          # Dataset loaders and injected containers
@@ -77,6 +79,10 @@ Single-file module with shared runtime helpers, used mainly by the train/evaluat
 - `sha256_file(path)` - streaming SHA-256 of a file (used by `InjectedDataset.describe`)
 
 ## Run Artifacts
+
+`artifacts.py` owns cross-layer helpers for run-directory creation, manifest writing, checkpoint metadata paths, checkpoint save/load, and registry-backed checkpoint reconstruction. Keep it independent of `training`, `evaluation`, and `cli`; those layers may import artifact helpers, but artifacts should not import upward into orchestration code.
+
+`workflows/` owns reusable train/evaluate orchestration that crosses datasets, model registry, trainer/evaluator, and artifacts. CLI modules should stay thin Typer wrappers that validate command inputs and call workflow functions.
 
 Every `cesta train` invocation creates a dedicated run directory; runs are never overwritten.
 
