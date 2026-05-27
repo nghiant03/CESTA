@@ -1,16 +1,16 @@
 train:
   model: lstm
   epochs: 100
-  batch_size: 32
-  learning_rate: 0.001
+  batch_size: 16
+  learning_rate: 0.0006
   use_focal_loss: false
   focal_gamma: 2.0
   focal_alpha: null
   oversample: false
   oversample_ratio: 1.0
-  features: ["temp"]
+  features:
+  - temp
   seed: 42
-
 data:
   window:
     window_size: 60
@@ -22,9 +22,8 @@ data:
     val_ratio: 0.1
     test_ratio: 0.1
     tolerance: 0.05
-
 model_kwargs:
-  hidden_size: 64
+  hidden_size: 128
   num_layers: 2
-  dropout: 0.2
+  dropout: 0.25
   bidirectional: true

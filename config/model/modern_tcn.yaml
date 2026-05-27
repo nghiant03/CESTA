@@ -1,16 +1,16 @@
 train:
   model: modern_tcn
   epochs: 100
-  batch_size: 32
-  learning_rate: 0.001
+  batch_size: 64
+  learning_rate: 0.003
   use_focal_loss: false
   focal_gamma: 2.0
   focal_alpha: null
   oversample: false
   oversample_ratio: 1.0
-  features: ["temp"]
+  features:
+  - temp
   seed: 42
-
 data:
   window:
     window_size: 60
@@ -22,12 +22,11 @@ data:
     val_ratio: 0.1
     test_ratio: 0.1
     tolerance: 0.05
-
 model_kwargs:
   hidden_size: 64
-  num_blocks: 4
+  num_blocks: 5
   kernel_size: 15
-  dropout: 0.1
-  expansion_ratio: 2.0
-  dilation_base: 2
+  dropout: 0.16
+  expansion_ratio: 3.25
+  dilation_base: 1
   layer_scale_init: 0.0001

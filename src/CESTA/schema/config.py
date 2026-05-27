@@ -103,6 +103,11 @@ class TrainConfig(BaseModel):
         boundary_positive_weight: Optional positive-class weight for sparse boundary labels.
         boundary_dilation: Temporal dilation radius around boundary targets.
         crf_loss_weight: Weight for optional linear-chain CRF sequence loss (0 = disabled).
+        persistent_transition_loss_weight: Weight for class-conditional CRF persistence regularization.
+        persistent_classes: Class IDs whose CRF self-transition should exceed NORMAL exit by a margin.
+        persistent_transition_margin: Required transition-score margin for persistent classes.
+        transient_classes: Class IDs whose CRF self-transition should stay below NORMAL exit by a margin.
+        transient_transition_margin: Required anti-persistence margin for transient classes.
         gumbel_tau_start: Initial Gumbel-Softmax temperature.
         gumbel_tau_end: Final Gumbel-Softmax temperature after annealing.
         gumbel_tau_anneal_epochs: Number of epochs over which to linearly anneal
@@ -139,6 +144,11 @@ class TrainConfig(BaseModel):
     boundary_positive_weight: float | None = Field(default=None, gt=0.0)
     boundary_dilation: int = Field(default=0, ge=0)
     crf_loss_weight: float = Field(default=0.0, ge=0.0)
+    persistent_transition_loss_weight: float = Field(default=0.0, ge=0.0)
+    persistent_classes: list[int] | None = None
+    persistent_transition_margin: float = Field(default=0.0, ge=0.0)
+    transient_classes: list[int] | None = None
+    transient_transition_margin: float = Field(default=0.0, ge=0.0)
     gumbel_tau_start: float = Field(default=1.0, gt=0.0)
     gumbel_tau_end: float = Field(default=1.0, gt=0.0)
     gumbel_tau_anneal_epochs: int = Field(default=0, ge=0)

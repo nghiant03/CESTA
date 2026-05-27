@@ -1,16 +1,16 @@
 train:
   model: transformer
   epochs: 100
-  batch_size: 32
-  learning_rate: 0.001
-  use_focal_loss: false
-  focal_gamma: 2.0
+  batch_size: 16
+  learning_rate: 0.0008
+  use_focal_loss: true
+  focal_gamma: 0.7
   focal_alpha: null
   oversample: false
   oversample_ratio: 1.0
-  features: ["temp"]
+  features:
+  - temp
   seed: 42
-
 data:
   window:
     window_size: 60
@@ -22,11 +22,10 @@ data:
     val_ratio: 0.1
     test_ratio: 0.1
     tolerance: 0.05
-
 model_kwargs:
-  d_model: 64
-  num_layers: 2
-  n_heads: 4
-  d_ff: 128
+  d_model: 32
+  num_layers: 3
+  n_heads: 8
+  d_ff: 256
   max_len: 60
-  dropout: 0.2
+  dropout: 0.02

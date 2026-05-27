@@ -1,16 +1,16 @@
 train:
   model: stgcn
   epochs: 100
-  batch_size: 32
-  learning_rate: 0.001
-  use_focal_loss: false
-  focal_gamma: 2.0
+  batch_size: 16
+  learning_rate: 0.01
+  use_focal_loss: true
+  focal_gamma: 2.5
   focal_alpha: null
-  oversample: false
-  oversample_ratio: 1.0
-  features: ["temp"]
+  oversample: true
+  oversample_ratio: 0.53
+  features:
+  - temp
   seed: 42
-
 data:
   window:
     window_size: 60
@@ -22,9 +22,8 @@ data:
     val_ratio: 0.1
     test_ratio: 0.1
     tolerance: 0.05
-
 model_kwargs:
-  st_hidden: 64
+  st_hidden: 128
   num_st_blocks: 2
   temporal_kernel: 3
-  dropout: 0.2
+  dropout: 0.3

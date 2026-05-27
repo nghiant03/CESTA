@@ -8,9 +8,9 @@ train:
   focal_alpha: null
   oversample: false
   oversample_ratio: 1.0
-  features: ["temp"]
+  features:
+  - temp
   seed: 42
-
 data:
   window:
     window_size: 60
@@ -22,13 +22,12 @@ data:
     val_ratio: 0.1
     test_ratio: 0.1
     tolerance: 0.05
-
 model_kwargs:
-  d_model: 32
-  num_layers: 2
-  n_heads: 4
+  d_model: 64
+  num_layers: 3
+  n_heads: 8
   d_ff: 64
-  patch_length: 8
+  patch_length: 4
   patch_stride: 1
   max_len: 60
-  dropout: 0.1
+  dropout: 0.06

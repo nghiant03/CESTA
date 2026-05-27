@@ -406,6 +406,7 @@ class Trainer:
             loss = self._add_counterfactual_voi_loss(model, loss, y_batch, node_mask)
             loss = self._add_boundary_loss(model, loss, y_batch, node_mask)
             loss = self._add_crf_loss(model, loss, logits, y_batch, node_mask)
+            loss = self._add_persistent_transition_loss(model, loss)
             loss.backward()
             optimizer.step()
 
@@ -558,6 +559,37 @@ class Trainer:
         if not isinstance(crf_loss, torch.Tensor):
             return loss
         return loss + weight * crf_loss
+
+    def _add_persistent_transition_loss(
+        self,
+        model: BaseModel,
+        loss: torch.Tensor,
+    ) -> torch.Tensor:
+        weight = self.config.persistent_transition_loss_weight
+        if weight <= 0.0:
+            return loss
+        transitions = getattr(model, "crf_transitions", None)
+        if not isinstance(transitions, torch.Tensor) or transitions.ndim != 2:
+            return loss
+        penalties: list[torch.Tensor] = []
+        if self.config.persistent_classes:
+            persistent_classes = torch.tensor(self.config.persistent_classes, dtype=torch.long, device=transitions.device)
+            valid_persistent = persistent_classes[(persistent_classes >= 0) & (persistent_classes < transitions.size(0))]
+            if valid_persistent.numel() > 0:
+                stay_scores = transitions[valid_persistent, valid_persistent]
+                exit_to_normal_scores = transitions[valid_persistent, 0]
+                penalties.append(torch.relu(self.config.persistent_transition_margin - (stay_scores - exit_to_normal_scores)).mean())
+        if self.config.transient_classes:
+            transient_classes = torch.tensor(self.config.transient_classes, dtype=torch.long, device=transitions.device)
+            valid_transient = transient_classes[(transient_classes >= 0) & (transient_classes < transitions.size(0))]
+            if valid_transient.numel() > 0:
+                stay_scores = transitions[valid_transient, valid_transient]
+                exit_to_normal_scores = transitions[valid_transient, 0]
+                penalties.append(torch.relu(self.config.transient_transition_margin + stay_scores - exit_to_normal_scores).mean())
+        if not penalties:
+            return loss
+        transition_loss = torch.stack(penalties).mean()
+        return loss + weight * transition_loss
 
     @staticmethod
     def _boundary_targets(

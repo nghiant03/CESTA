@@ -1,16 +1,16 @@
 train:
   model: autoformer
   epochs: 100
-  batch_size: 32
-  learning_rate: 0.001
-  use_focal_loss: false
-  focal_gamma: 2.0
+  batch_size: 16
+  learning_rate: 0.0008
+  use_focal_loss: true
+  focal_gamma: 1.8
   focal_alpha: null
-  oversample: false
-  oversample_ratio: 1.0
-  features: ["temp"]
+  oversample: true
+  oversample_ratio: 0.67
+  features:
+  - temp
   seed: 42
-
 data:
   window:
     window_size: 60
@@ -22,12 +22,11 @@ data:
     val_ratio: 0.1
     test_ratio: 0.1
     tolerance: 0.05
-
 model_kwargs:
-  d_model: 32
-  num_layers: 1
-  n_heads: 4
-  d_ff: 64
+  d_model: 64
+  num_layers: 4
+  n_heads: 2
+  d_ff: 128
   max_len: 60
-  dropout: 0.1
-  moving_average: 5
+  dropout: 0.005
+  moving_average: 7
