@@ -51,6 +51,3 @@ def configure_logging(level: str = "INFO", verbose: bool = False) -> None:
         level=level.upper(),
         colorize=True,
     )
-
-
-__all__ = ["logger", "configure_logging"]

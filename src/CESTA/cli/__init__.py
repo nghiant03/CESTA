@@ -1,6 +1,5 @@
 """CESTA CLI - Centralized command-line interface using Typer."""
 
-from pathlib import Path
 from typing import Annotated
 
 import typer
@@ -11,7 +10,6 @@ from CESTA.cli.evaluate import evaluate
 from CESTA.cli.inject import inject
 from CESTA.cli.optimize import app as optimize_app
 from CESTA.cli.prepare import app as prepare_app
-from CESTA.cli.report import app as report_app
 from CESTA.cli.train import train
 from CESTA.logging import configure_logging
 
@@ -45,14 +43,10 @@ def _print_name_table(title: str, names: list[str]) -> None:
 def list_items(
     category: Annotated[
         str,
-        typer.Argument(help="What to list: datasets, models, metrics, or runs"),
+        typer.Argument(help="What to list: datasets, models, or metrics"),
     ],
-    runs_dir: Annotated[
-        Path,
-        typer.Option("--runs-dir", help="Root runs directory for 'runs' listings"),
-    ] = Path("runs"),
 ) -> None:
-    """List datasets, models, metrics, or runs."""
+    """List datasets, models, or metrics."""
     category_key = category.lower()
     if category_key == "datasets":
         from CESTA.datasets import list_datasets
@@ -68,13 +62,7 @@ def list_items(
         metrics = ["accuracy", "precision", "recall", "f1", "confusion_matrix", "roc_auc"]
         _print_name_table("Available Metrics", metrics)
         return
-    if category_key == "runs":
-        from CESTA.cli.report import list_runs
-
-        list_runs(runs_dir)
-        return
-
-    raise typer.BadParameter("Expected one of: datasets, models, metrics, runs")
+    raise typer.BadParameter("Expected one of: datasets, models, metrics")
 
 
 app.command("inject", help="Inject faults into sensor datasets")(inject)
@@ -82,7 +70,6 @@ app.add_typer(prepare_app, name="prepare", help="Prepare dataset variants (e.g. 
 app.command("train", help="Train deep learning models")(train)
 app.command("evaluate", help="Evaluate trained models")(evaluate)
 app.add_typer(optimize_app, name="optimize", help="Hyperparameter optimization with Optuna")
-app.add_typer(report_app, name="report", help="Aggregate run artifacts into comparison reports")
 
 
 def main() -> None:

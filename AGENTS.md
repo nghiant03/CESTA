@@ -173,7 +173,8 @@ net = create_model(config.model, input_size=prepared.input_size,
 
 - `FocalLoss` (`loss.py`) - Focal loss for imbalanced multi-class classification. gamma=0 recovers CE.
 - `oversample_minority` (`oversampling.py`) - Window-level oversampling: duplicates windows containing any non-NORMAL label until minority count reaches `ratio * majority_count`.
-- `Trainer` (`trainer.py`) - Full training loop with Adam optimizer, optional focal loss, optional oversampling, optional CRF persistence regularization, and callback hooks. Returns `TrainResult` with per-epoch history. Expects val data passed explicitly (produced by `dataset.prepare()`). The train CLI and Optuna optimizer call `seed_everything(config.seed)` before model construction so initial weights, training RNG, and DataLoader shuffling are tied to the config seed.
+- `Trainer` (`trainer.py`) - Full training loop with Adam optimizer, optional focal loss, optional oversampling, metric collection, and callback hooks. Returns `TrainResult` with per-epoch history. Expects val data passed explicitly (produced by `dataset.prepare()`). The train CLI and Optuna optimizer call `seed_everything(config.seed)` before model construction so initial weights, training RNG, and DataLoader shuffling are tied to the config seed.
+- `objectives.py` - Shared masked-loss, prediction decoding, valid-output filtering, and composed auxiliary training objectives (communication, VOI, boundary, CRF, persistence) used by trainers/evaluators without embedding model-specific objective logic in the training loop.
 - `TrainingCallback` (`callbacks.py`) - Abstract base; implementations: `LoggingCallback`, `EarlyStoppingCallback`, `CheckpointCallback`, `HistoryCallback` (per-epoch JSONL dump of `TrainMetrics`).
 
 ## Evaluation Module (`evaluation/`)
@@ -285,7 +286,6 @@ cesta                    # Main entry point
 ├── evaluate            # Evaluate a model
 ├── optimize            # Run Optuna hyperparameter optimization
 │   └── show            # Display study results
-├── report              # Aggregate and compare run artifacts
 └── list                # List datasets, models, metrics, or runs
 ```
 
