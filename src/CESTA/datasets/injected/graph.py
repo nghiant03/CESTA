@@ -34,7 +34,6 @@ class GraphMetadata:
     burst_params: dict[str, float] = field(default_factory=dict)
     timestamps: list[Any] = field(default_factory=list)
     link_mask_shape: tuple[int, int] | None = None
-    adjacency: NDArray[np.float32] | None = None
 
     @property
     def num_edges(self) -> int:
@@ -78,20 +77,6 @@ def load_directed_edges(
         threshold,
     )
     return edge_index, edge_prob
-
-
-def load_adjacency_matrix(
-    connectivity_path: str | Path,
-    node_ids: list[int],
-    threshold: float = 0.5,
-) -> NDArray[np.float32]:
-    edge_index, _ = load_directed_edges(connectivity_path, node_ids, threshold)
-    adj = np.zeros((len(node_ids), len(node_ids)), dtype=np.float32)
-    if edge_index.shape[1] > 0:
-        adj[edge_index[0], edge_index[1]] = 1.0
-        adj[edge_index[1], edge_index[0]] = 1.0
-    np.fill_diagonal(adj, 1.0)
-    return adj
 
 
 def simulate_bursty_link_mask(
@@ -186,13 +171,6 @@ class GraphDataset(InjectedDataset):
     @property
     def num_nodes(self) -> int:
         return len(self.node_ids)
-
-    @property
-    def adjacency(self) -> NDArray[np.float32]:
-        adj = np.zeros((self.num_nodes, self.num_nodes), dtype=np.float32)
-        if self.edge_index.shape[1] > 0:
-            adj[self.edge_index[0], self.edge_index[1]] = 1.0
-        return adj
 
     def save(self, path: str | Path) -> None:
         super().save(path)
@@ -384,7 +362,6 @@ class GraphDataset(InjectedDataset):
             burst_params=dict(self.graph_meta.get("burst_params", {})),
             timestamps=[str(ts) for ts in timestamps],
             link_mask_shape=tuple(self.link_mask.shape),
-            adjacency=self.adjacency,
         )
 
         return WindowedSplits(

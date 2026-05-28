@@ -29,8 +29,8 @@ class CESTACommunicationMixin:
     num_classes: int
     classifier: Any
     logit_correction: Any
+    edge_index: torch.Tensor
     edge_prob: torch.Tensor
-    adjacency: torch.Tensor
     precision_bits: int
     encoder_output_size: int
     neighbor_belief_size: int
@@ -264,9 +264,12 @@ class CESTACommunicationMixin:
         B, T, N, _ = local_hidden.shape
         device = local_hidden.device
         if edge_index is None or edge_mask is None:
-            adjacency = cast(torch.Tensor, self.adjacency).to(device)
-            message_mask = adjacency.clone()
-            message_mask.fill_diagonal_(0.0)
+            static_edge_index = cast(torch.Tensor, self.edge_index).to(device=device, dtype=torch.long)
+            message_mask = torch.zeros(N, N, dtype=local_hidden.dtype, device=device)
+            if static_edge_index.numel() > 0:
+                sender = static_edge_index[0]
+                receiver = static_edge_index[1]
+                message_mask[receiver, sender] = 1.0
             return message_mask.view(1, 1, N, N).expand(B, T, N, N)
 
         message_mask = torch.zeros(B, T, N, N, dtype=local_hidden.dtype, device=device)
@@ -371,9 +374,7 @@ class CESTACommunicationMixin:
         return entropy_per_element.mean()
 
     def _possible_edge_count(self, device: torch.device | None = None) -> float:
-        adjacency = cast(torch.Tensor, self.adjacency)
+        edge_index = cast(torch.Tensor, self.edge_index)
         if device is not None:
-            adjacency = adjacency.to(device)
-        message_mask = adjacency.clone()
-        message_mask.fill_diagonal_(0.0)
-        return float(message_mask.sum().item())
+            edge_index = edge_index.to(device)
+        return float(edge_index.shape[1])

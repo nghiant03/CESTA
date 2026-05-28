@@ -144,10 +144,9 @@ Pre-injection dataset loaders.
 Post-injection containers, graph topology, and windowing.
 
 - `InjectedDataset` (`injected/tabular.py`) - Container with injected DataFrame + config + save/load. Has `.prepare(window_config, split_config, features, required_metadata) -> WindowedSplits` for per-group chronological windowing. Window and split settings are train-time data config, not injection config.
-- `GraphDataset` (`injected/graph.py`) - Subclass of `InjectedDataset` that adds graph topology (adjacency matrix, node IDs, threshold). Overrides `.prepare()` for graph-aligned windowing (concatenates all sensor features per timestep, keeps **per-node labels** of shape `(num_windows, window_size, num_nodes)`). When `required_metadata` does not include `"graph"`, delegates to `InjectedDataset.prepare()` so non-graph models work on graph datasets without shape mismatch. Graph split strategy can be `chronological` or `connectivity-chronological`; the latter finds the contiguous active communication block from available edge masks, splits train/val/test chronologically inside that block, and raises `ValueError` if each split cannot contain an active-edge graph window. Later no-communication periods should be evaluated separately as stress tests if needed. Returns `GraphMetadata` in `WindowedSplits.metadata["graph"]`. Built via `GraphDataset.from_connectivity(path, connectivity_path, threshold)` or loaded from disk with `GraphDataset.load(path)`.
-- `GraphMetadata` (`injected/graph.py`) - Typed dataclass holding `adjacency`, `node_ids`, `num_nodes`, `threshold`. Stored in `WindowedSplits.metadata["graph"]` by `GraphDataset.prepare()`.
+- `GraphDataset` (`injected/graph.py`) - Subclass of `InjectedDataset` that adds dynamic directed graph topology (`edge_index`, `edge_prob`, node IDs, threshold, and link masks). Overrides `.prepare()` for graph-aligned windowing (concatenates all sensor features per timestep, keeps **per-node labels** of shape `(num_windows, window_size, num_nodes)`). When `required_metadata` does not include `"graph"`, delegates to `InjectedDataset.prepare()` so non-graph models work on graph datasets without shape mismatch. Graph split strategy can be `chronological` or `connectivity-chronological`; the latter finds the contiguous active communication block from available edge masks, splits train/val/test chronologically inside that block, and raises `ValueError` if each split cannot contain an active-edge graph window. Later no-communication periods should be evaluated separately as stress tests if needed. Returns `GraphMetadata` in `WindowedSplits.metadata["graph"]`. Built via `GraphDataset.from_connectivity(path, connectivity_path, threshold)` or loaded from disk with `GraphDataset.load(path)`.
+- `GraphMetadata` (`injected/graph.py`) - Typed dataclass holding canonical directed edge metadata: `edge_index`, `edge_prob`, `node_ids`, `num_nodes`, and dynamic-link simulation metadata. Stored in `WindowedSplits.metadata["graph"]` by `GraphDataset.prepare()`.
 - `WindowedSplits` (`injected/windowed.py`) - Unified dataclass holding windowed data partitions + `metadata` dict. Includes input-shape metadata and split-availability flags.
-- `load_adjacency_matrix` (`injected/graph.py`) - Loads binary adjacency matrix from a connectivity data file (whitespace-separated: `source dest probability`), thresholds by connectivity probability.
 - `load_dataset` (`injected/loading.py`) - Loads the appropriate dataset variant (`InjectedDataset` or `GraphDataset`) based on which files exist on disk.
 - `validate_features` (`injected/windowed.py`) - Shared feature-name validation used by both `InjectedDataset.prepare()` and `GraphDataset.prepare()`.
 - `collect_splits` (`injected/windowed.py`) - Shared helper to concatenate per-group window parts into final arrays with correct empty fallbacks. Accepts `label_trailing_shape` for per-node label dimensions.
@@ -156,7 +155,7 @@ Post-injection containers, graph topology, and windowing.
 
 All dataset types expose a `.prepare(window_config, split_config, required_metadata=...)` method returning `WindowedSplits`. The train CLI loads `TrainConfig.data.window` and `TrainConfig.data.split`, calls `load_dataset(path)`, then `dataset.prepare(window_config=config.data.window, split_config=config.data.split, required_metadata=model_cls.required_metadata)` dispatches polymorphically. When a `GraphDataset` receives `required_metadata` without `"graph"`, it falls back to temporal windows for non-graph models; if the requested split strategy is `connectivity-chronological`, the fallback uses the same active communication block and split boundaries as graph models, dropping only node windows with missing samples. Graph metadata travels via `WindowedSplits.metadata["graph"]`. Temporal models can request `node_identity` metadata by setting `node_embedding_dim > 0` in `model_kwargs`; the train/evaluate loaders then pass per-window node IDs through `TemporalWindowBatch`.
 
-`create_model` accepts `metadata` and automatically validates model requirements and extracts architecture-specific kwargs (e.g. `num_nodes`, `adjacency` for GCN).
+`create_model` accepts `metadata` and automatically validates model requirements and extracts architecture-specific kwargs (e.g. `num_nodes`, `edge_index`, and `edge_prob` for graph models).
 
 ```python
 dataset = load_dataset(data)
@@ -286,7 +285,7 @@ cesta                    # Main entry point
 ├── evaluate            # Evaluate a model
 ├── optimize            # Run Optuna hyperparameter optimization
 │   └── show            # Display study results
-└── list                # List datasets, models, metrics, or runs
+└── list                # List datasets, models, or metrics
 ```
 
 Run `cesta --help` or `cesta <subcommand> --help` for detailed options.

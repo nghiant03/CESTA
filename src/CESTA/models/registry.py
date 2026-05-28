@@ -124,14 +124,9 @@ def _extract_metadata_kwargs(
 
         graph_meta = metadata.get("graph")
         if isinstance(graph_meta, GraphMetadata):
-            if graph_meta.adjacency is None:
-                raise ValueError("Graph metadata is missing adjacency")
-            edge_prob = graph_meta.adjacency.copy()
-            if graph_meta.edge_index.shape[1] > 0:
-                edge_prob[graph_meta.edge_index[0], graph_meta.edge_index[1]] = graph_meta.edge_prob
             kwargs["num_nodes"] = graph_meta.num_nodes
-            kwargs["adjacency"] = graph_meta.adjacency.tolist()
-            kwargs["edge_prob"] = edge_prob.tolist()
+            kwargs["edge_index"] = graph_meta.edge_index.tolist()
+            kwargs["edge_prob"] = graph_meta.edge_prob.tolist()
 
     node_identity = metadata.get("node_identity")
     if "node_identity" in required and isinstance(node_identity, dict):

@@ -126,15 +126,13 @@ def _collect_graph_metadata(metadata: dict[str, object] | None) -> dict[str, Any
 
 
 def _graph_edge_count(config: dict[str, Any]) -> float | None:
-    adjacency = config.get("adjacency")
-    if not isinstance(adjacency, list):
+    edge_index = config.get("edge_index")
+    if not isinstance(edge_index, list):
         return None
-    adj_tensor = torch.tensor(adjacency, dtype=torch.float32)
-    if adj_tensor.ndim != 2 or adj_tensor.shape[0] != adj_tensor.shape[1]:
+    edge_index_tensor = torch.tensor(edge_index, dtype=torch.long)
+    if edge_index_tensor.ndim != 2 or edge_index_tensor.shape[0] != 2:
         return None
-    adj_tensor = adj_tensor.clone()
-    adj_tensor.fill_diagonal_(0.0)
-    return float(adj_tensor.sum().item())
+    return float(edge_index_tensor.shape[1])
 
 
 def _sanitize(value: Any) -> Any:

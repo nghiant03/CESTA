@@ -29,8 +29,8 @@ class CESTAClassifier(CESTASequenceMixin, CESTACommunicationMixin, BaseModel):
         self,
         input_size: int,
         num_nodes: int,
-        adjacency: list[list[float]] | None = None,
-        edge_prob: list[list[float]] | None = None,
+        edge_index: list[list[int]] | None = None,
+        edge_prob: list[float] | None = None,
         hidden_size: int = 64,
         num_layers: int = 1,
         num_classes: int = 4,
@@ -121,23 +121,26 @@ class CESTAClassifier(CESTASequenceMixin, CESTACommunicationMixin, BaseModel):
         if self.encoder_output_size % num_attention_heads != 0:
             raise ValueError("encoder output size must be divisible by num_attention_heads")
 
-        if adjacency is not None:
-            adj_tensor = torch.tensor(adjacency, dtype=torch.float32)
+        if edge_index is not None:
+            edge_index_tensor = torch.tensor(edge_index, dtype=torch.long)
         else:
-            adj_tensor = torch.eye(num_nodes, dtype=torch.float32)
-        if adj_tensor.shape != (num_nodes, num_nodes):
-            raise ValueError("adjacency must have shape (num_nodes, num_nodes)")
+            edge_index_tensor = torch.empty((2, 0), dtype=torch.long)
+        if edge_index_tensor.shape[0] != 2:
+            raise ValueError("edge_index must have shape (2, num_edges)")
         if edge_prob is not None:
             edge_prob_tensor = torch.tensor(edge_prob, dtype=torch.float32)
         else:
-            edge_prob_tensor = adj_tensor.clone()
-            edge_prob_tensor.fill_diagonal_(0.0)
-        if edge_prob_tensor.shape != (num_nodes, num_nodes):
-            raise ValueError("edge_prob must have shape (num_nodes, num_nodes)")
-        self.register_buffer("adjacency", adj_tensor)
-        self.register_buffer("edge_prob", edge_prob_tensor)
-        self._adjacency_list: list[list[float]] = adj_tensor.tolist()
-        self._edge_prob_list: list[list[float]] = edge_prob_tensor.tolist()
+            edge_prob_tensor = torch.ones((edge_index_tensor.shape[1],), dtype=torch.float32)
+        if edge_prob_tensor.shape != (edge_index_tensor.shape[1],):
+            raise ValueError("edge_prob must have shape (num_edges,)")
+        self.register_buffer("edge_index", edge_index_tensor)
+        self.register_buffer("edge_prob_values", edge_prob_tensor)
+        edge_prob_matrix = torch.zeros((num_nodes, num_nodes), dtype=torch.float32)
+        if edge_index_tensor.numel() > 0:
+            edge_prob_matrix[edge_index_tensor[1], edge_index_tensor[0]] = edge_prob_tensor
+        self.register_buffer("edge_prob", edge_prob_matrix)
+        self._edge_index_list: list[list[int]] = edge_index_tensor.tolist()
+        self._edge_prob_list: list[float] = edge_prob_tensor.tolist()
 
         self.temporal_encoder = nn.GRU(
             input_size=self.features_per_node,
@@ -368,8 +371,9 @@ class CESTAClassifier(CESTASequenceMixin, CESTACommunicationMixin, BaseModel):
         return {
             "input_size": self.input_size,
             "num_nodes": self.num_nodes,
-            "adjacency": self._adjacency_list,
+            "edge_index": self._edge_index_list,
             "edge_prob": self._edge_prob_list,
+            "graph_edge_count": len(self._edge_prob_list),
             "hidden_size": self.hidden_size,
             "num_layers": self.num_layers,
             "num_classes": self.num_classes,

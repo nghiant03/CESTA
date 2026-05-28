@@ -10,9 +10,9 @@ from CESTA.datasets.injected.tabular import InjectedDataset
 def load_dataset(path: str | Path) -> InjectedDataset:
     """Load the appropriate dataset variant from a directory.
 
-    If the directory contains graph metadata files (``adjacency.npy``
-    and ``graph_meta.json``), a :class:`GraphDataset` is returned.
-    Otherwise a plain :class:`InjectedDataset` is returned.
+    If the directory contains dynamic graph metadata files, a
+    :class:`GraphDataset` is returned. Otherwise a plain
+    :class:`InjectedDataset` is returned.
 
     Since ``GraphDataset`` is a subclass of ``InjectedDataset``, the
     return type is always ``InjectedDataset`` and callers can use

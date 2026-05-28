@@ -2,7 +2,7 @@
 
 **Communication-Efficient Spatial-Temporal Aggregation for sensor fault diagnosis.**
 
-CESTA is a research codebase for studying communication-aware fault diagnosis in sensor networks. It provides a reproducible pipeline for fault injection, graph-aware dataset preparation, temporal and spatial-temporal model training, communication-cost evaluation, and run artifact reporting.
+CESTA is a research codebase for studying communication-aware fault diagnosis in sensor networks. It provides a reproducible pipeline for fault injection, graph-aware dataset preparation, temporal and spatial-temporal model training, communication-cost evaluation, and run artifact persistence.
 
 The current research focus is a receiver-side learned request mechanism: each sensor node first reasons from local temporal evidence, then selectively requests neighbor information over existing graph edges when communication is expected to improve diagnosis.
 
@@ -24,7 +24,7 @@ See [`docs/PROPOSAL.md`](docs/PROPOSAL.md) and [`docs/EXPERIMENT.md`](docs/EXPER
 - Communication-aware CESTA with receiver-side Gumbel request gating, optional neighbor belief messages, communication-conditioned correction, VOI-style objectives, and CRF sequence decoding.
 - Dynamic graph preparation from Intel connectivity data, including graph-aligned windows, node masks, edge masks, and per-node labels.
 - Reproducible run artifacts: manifests, configs, checkpoints, histories, evaluation metrics, predictions, and communication metrics.
-- Optuna hyperparameter optimization and run-report aggregation.
+- Optuna hyperparameter optimization for reproducible model selection.
 - Optional ESP32-S3 Rust firmware for lab sensor collection over MQTT.
 
 ## Installation
@@ -53,7 +53,7 @@ uv run cesta list datasets
 
 ## Quick start
 
-The standard workflow is fault injection, optional graph preparation, training, evaluation, and reporting.
+The standard workflow is fault injection, optional graph preparation, training, and evaluation.
 
 ```bash
 # 1. Inject faults into raw Intel sensor data
@@ -70,9 +70,6 @@ uv run cesta train config/model/cesta.yaml data/injected/intel_lab
 
 # 5. Evaluate a run
 uv run cesta evaluate --model runs/cesta/<run_id> --data data/injected/intel_lab
-
-# 6. Compare completed runs
-uv run cesta report compare runs
 ```
 
 Diagnosis-focused configurations live under `config/model/diagnosis/` and encode the current higher-end research settings for dense, request-gated, residual, and capacity-matched CESTA variants.
@@ -136,8 +133,7 @@ cesta
 ├── evaluate            # Evaluate a trained run
 ├── optimize            # Run Optuna hyperparameter search
 │   └── show            # Display study results
-├── report              # Aggregate and compare run artifacts
-└── list                # List datasets, models, metrics, or runs
+└── list                # List datasets, models, or metrics
 ```
 
 Run `uv run cesta <command> --help` for command-specific options.

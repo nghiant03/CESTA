@@ -158,7 +158,7 @@ class STConvBlock(nn.Module):
 class STGCNClassifier(BaseModel):
     """ST-GCN model for per-node many-to-many fault classification.
 
-    Requires ``"graph"`` metadata (adjacency matrix and node mapping)
+    Requires ``"graph"`` metadata (directed edge index and node mapping)
     to be present in the prepared dataset.
 
     Architecture::
@@ -176,7 +176,7 @@ class STGCNClassifier(BaseModel):
         input_size: Total input features per timestep
             (``num_nodes * features_per_node``).
         num_nodes: Number of graph nodes (sensors).
-        adjacency: Dense adjacency matrix as ``list[list[float]]``.
+        edge_index: Directed graph edge index as ``list[list[int]]``.
         st_hidden: Hidden channel dimension inside ST-Conv blocks.
         num_st_blocks: Number of stacked ST-Conv blocks.
         temporal_kernel: Kernel size for temporal convolutions.
@@ -190,7 +190,7 @@ class STGCNClassifier(BaseModel):
         self,
         input_size: int,
         num_nodes: int,
-        adjacency: list[list[float]] | None = None,
+        edge_index: list[list[int]] | None = None,
         st_hidden: int = 64,
         num_st_blocks: int = 2,
         temporal_kernel: int = 3,
@@ -209,17 +209,14 @@ class STGCNClassifier(BaseModel):
 
         self.features_per_node = input_size // num_nodes
 
-        if adjacency is not None:
-            adj_tensor = torch.tensor(adjacency, dtype=torch.float32)
+        if edge_index is not None:
+            edge_index_tensor = torch.tensor(edge_index, dtype=torch.long)
         else:
-            adj_tensor = torch.eye(num_nodes, dtype=torch.float32)
-
-        edge_index = adj_tensor.nonzero(as_tuple=False).t().contiguous()
-        self.register_buffer("edge_index", edge_index)
-
-        self._adjacency_list: list[list[float]] = (
-            adjacency if adjacency is not None else torch.eye(num_nodes).tolist()
-        )
+            edge_index_tensor = torch.arange(num_nodes, dtype=torch.long).repeat(2, 1)
+        if edge_index_tensor.shape[0] != 2:
+            raise ValueError("edge_index must have shape (2, num_edges)")
+        self.register_buffer("edge_index", edge_index_tensor)
+        self._edge_index_list: list[list[int]] = edge_index_tensor.tolist()
 
         blocks: list[STConvBlock] = []
         in_ch = self.features_per_node
@@ -279,7 +276,7 @@ class STGCNClassifier(BaseModel):
         return {
             "input_size": self.input_size,
             "num_nodes": self.num_nodes,
-            "adjacency": self._adjacency_list,
+            "edge_index": self._edge_index_list,
             "st_hidden": self.st_hidden_size,
             "num_st_blocks": self.num_st_blocks,
             "temporal_kernel": self.temporal_kernel_size,
