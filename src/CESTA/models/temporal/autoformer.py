@@ -8,8 +8,6 @@ decoder (designed for forecasting) is not needed.
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import torch
 import torch.nn as nn
 
@@ -124,10 +122,3 @@ class AutoformerClassifier(BaseModel):
             "moving_average": self.moving_average,
         }
 
-    @classmethod
-    def from_checkpoint(cls, path: str | Path) -> AutoformerClassifier:
-        from CESTA.artifacts import load_checkpoint
-
-        model = load_checkpoint(path)
-        assert isinstance(model, cls)
-        return model

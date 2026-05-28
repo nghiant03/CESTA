@@ -12,8 +12,8 @@ from abc import ABC, abstractmethod
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
-from CESTA.evaluation.metrics import ClassMetrics
 from CESTA.logging import logger
+from CESTA.metrics import ClassMetrics
 from CESTA.models.base import BaseModel
 
 

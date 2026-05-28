@@ -12,6 +12,7 @@ from numpy.typing import NDArray
 from torch.utils.data import DataLoader
 
 from CESTA.logging import logger
+from CESTA.metrics import compute_class_metrics, macro_f1
 from CESTA.models.base import BaseModel
 from CESTA.schema import EvaluateConfig
 from CESTA.schema.fault import FaultType
@@ -19,7 +20,6 @@ from CESTA.training.batch_utils import infer_num_classes, make_window_loader, pr
 from CESTA.training.objectives import decode_predictions, masked_loss, valid_outputs
 
 from .communication import aggregate_communication_stats
-from .metrics import compute_class_metrics, macro_f1
 from .result import EvalResult
 
 

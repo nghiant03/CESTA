@@ -25,6 +25,7 @@ This repository is a research project for fault diagnosis analysis.
 src/CESTA/
 ├── schema/            # Pydantic config and manifest schemas split by domain
 ├── batch.py           # Runtime batch contracts shared by training/evaluation/spatial models
+├── metrics.py         # Shared classification metrics used by training and evaluation
 ├── artifacts.py       # Cross-layer run artifact, manifest, and checkpoint helpers
 ├── workflows/         # Reusable train/evaluate orchestration above domain packages, below CLI
 ├── cli/               # Typer CLI with subcommands (inject, prepare, train, evaluate)
@@ -36,7 +37,7 @@ src/CESTA/
 │   ├── temporal/      # Temporal models: CNN1D, LSTM, GRU, Transformer, Autoformer, Informer, PatchTST, ModernTCN
 │   └── spatial/       # Spatial models: ST-GCN, CESTA
 ├── training/          # Trainer, focal loss, oversampling, and callbacks
-├── evaluation/        # Metrics, ClassMetrics, evaluator
+├── evaluation/        # Evaluator, evaluation result persistence, and communication metrics
 ├── optimization/      # Optuna search spaces and Optimizer for HPO
 ├── utils.py           # Shared runtime helpers (git/env collectors, run id, sha256)
 ├── seed.py            # seed_everything() utility for reproducibility
@@ -78,9 +79,13 @@ Single-file module with shared runtime helpers, used mainly by the train/evaluat
 - `utc_now_iso()` - ISO-8601 UTC timestamp
 - `sha256_file(path)` - streaming SHA-256 of a file (used by `InjectedDataset.describe`)
 
+## Metrics
+
+`metrics.py` owns shared classification metrics (`ClassMetrics`, `compute_class_metrics`, `macro_f1`, `confusion_matrix`) used by both training and evaluation. `evaluation/metrics.py` is a backward-compatible re-export shim only; new imports should use `CESTA.metrics`.
+
 ## Run Artifacts
 
-`artifacts.py` owns cross-layer helpers for run-directory creation, manifest writing, checkpoint metadata paths, checkpoint save/load, and registry-backed checkpoint reconstruction. Keep it independent of `training`, `evaluation`, and `cli`; those layers may import artifact helpers, but artifacts should not import upward into orchestration code.
+`artifacts.py` owns cross-layer helpers for run-directory creation, manifest writing, checkpoint metadata paths, checkpoint save/load, and registry-backed checkpoint reconstruction. It uses a structural checkpoint protocol instead of importing `BaseModel`, so it remains independent of `models`, `training`, `evaluation`, and `cli`; those layers may import artifact helpers, but artifacts should not import upward into orchestration code.
 
 `workflows/` owns reusable train/evaluate orchestration that crosses datasets, model registry, trainer/evaluator, and artifacts. CLI modules should stay thin Typer wrappers that validate command inputs and call workflow functions.
 

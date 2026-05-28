@@ -6,7 +6,6 @@ fault diagnosis, predicting a fault label at each timestep.
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import ClassVar
 
 import torch
@@ -118,10 +117,3 @@ class GRUClassifier(BaseModel):
             "node_embedding_dim": self.node_embedding_dim,
         }
 
-    @classmethod
-    def from_checkpoint(cls, path: str | Path) -> "GRUClassifier":
-        from CESTA.artifacts import load_checkpoint
-
-        model = load_checkpoint(path)
-        assert isinstance(model, cls)
-        return model

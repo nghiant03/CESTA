@@ -7,6 +7,8 @@ Handles the full training loop including:
 - Per-class precision, recall, F1 metrics
 """
 
+from __future__ import annotations
+
 from dataclasses import dataclass, field
 from typing import Sequence
 
@@ -17,8 +19,8 @@ import torch.nn.functional as F
 from numpy.typing import NDArray
 from torch.utils.data import DataLoader
 
-from CESTA.evaluation.metrics import ClassMetrics, compute_class_metrics, macro_f1
 from CESTA.logging import logger
+from CESTA.metrics import ClassMetrics, compute_class_metrics, macro_f1
 from CESTA.models.base import BaseModel
 from CESTA.schema import TrainConfig
 from CESTA.seed import seed_everything
@@ -66,7 +68,9 @@ def _prepare_data(
     X: NDArray[np.float32],
     y: NDArray[np.int32],
     config: TrainConfig,
-) -> tuple[NDArray[np.float32], NDArray[np.int32]]:
+    node_mask: NDArray[np.bool_] | None = None,
+    edge_mask: NDArray[np.bool_] | None = None,
+) -> tuple[NDArray[np.float32], NDArray[np.int32], NDArray[np.bool_] | None, NDArray[np.bool_] | None]:
     """Apply oversampling if enabled.
 
     Args:
@@ -83,16 +87,16 @@ def _prepare_data(
             config.oversample_ratio,
             config.seed,
         )
-        X_out, y_out = oversample_minority(
-            X, y, ratio=config.oversample_ratio, seed=config.seed
+        X_out, y_out, node_mask_out, edge_mask_out = oversample_minority(
+            X, y, config.oversample_ratio, config.seed, node_mask, edge_mask
         )
         logger.info(
             "Oversampled: {} -> {} windows",
             len(X),
             len(X_out),
         )
-        return X_out, y_out
-    return X, y
+        return X_out, y_out, node_mask_out, edge_mask_out
+    return X, y, node_mask, edge_mask
 
 
 @dataclass
@@ -168,7 +172,13 @@ class Trainer:
             X_train.shape,
             y_train.shape,
         )
-        X_train, y_train = _prepare_data(X_train, y_train, self.config)
+        X_train, y_train, node_mask_train, edge_mask_train = _prepare_data(
+            X_train,
+            y_train,
+            self.config,
+            node_mask_train,
+            edge_mask_train,
+        )
 
         if X_val is not None and y_val is not None:
             logger.info(

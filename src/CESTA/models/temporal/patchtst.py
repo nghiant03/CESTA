@@ -16,8 +16,6 @@ Reference:
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -150,10 +148,3 @@ class PatchTSTClassifier(BaseModel):
             "dropout": self.dropout_prob,
         }
 
-    @classmethod
-    def from_checkpoint(cls, path: str | Path) -> PatchTSTClassifier:
-        from CESTA.artifacts import load_checkpoint
-
-        model = load_checkpoint(path)
-        assert isinstance(model, cls)
-        return model

@@ -4,14 +4,27 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol, TypeVar
 
 import torch
 
-from CESTA.models.base import BaseModel
 from CESTA.schema import RunManifest
 from CESTA.schema.manifest import GitInfo
 from CESTA.utils import generate_run_id
+
+
+class CheckpointModel(Protocol):
+    @property
+    def name(self) -> str: ...
+
+    def get_config(self) -> dict[str, object]: ...
+
+    def state_dict(self, *args: Any, **kwargs: Any) -> object: ...
+
+    def load_state_dict(self, state_dict: Any, strict: bool = True, assign: bool = False) -> object: ...
+
+
+ModelT = TypeVar("ModelT", bound=CheckpointModel)
 
 
 def create_run_dir(output_root: Path, *, model: str, seed: int, git: GitInfo) -> Path:
@@ -26,14 +39,14 @@ def write_manifest(path: str | Path, manifest: RunManifest) -> Path:
     return manifest_path
 
 
-def save_checkpoint(model: BaseModel, path: str | Path, config_dict: dict[str, object] | None = None) -> None:
+def save_checkpoint(model: CheckpointModel, path: str | Path, config_dict: dict[str, object] | None = None) -> None:
     directory = Path(path)
     directory.mkdir(parents=True, exist_ok=True)
     torch.save(model.state_dict(), checkpoint_weight_path(directory))
     checkpoint_metadata_path(directory).write_text(json.dumps(build_checkpoint_metadata(model, config_dict), indent=2))
 
 
-def build_checkpoint_metadata(model: BaseModel, config_dict: dict[str, object] | None = None) -> dict[str, object]:
+def build_checkpoint_metadata(model: CheckpointModel, config_dict: dict[str, object] | None = None) -> dict[str, object]:
     meta: dict[str, object] = {
         "model_name": model.name,
         "model_config": model.get_config(),
@@ -61,11 +74,11 @@ def load_checkpoint_train_config(path: str | Path) -> dict[str, object] | None:
     return train_config if isinstance(train_config, dict) else None
 
 
-def instantiate_model_from_config(config: dict[str, object], model_cls: type[BaseModel]) -> BaseModel:
+def instantiate_model_from_config(config: dict[str, object], model_cls: type[ModelT]) -> ModelT:
     return model_cls(**config)
 
 
-def load_checkpoint_weights(model: BaseModel, path: str | Path, *, map_location: object | None = None) -> BaseModel:
+def load_checkpoint_weights(model: ModelT, path: str | Path, *, map_location: object | None = None) -> ModelT:
     load_kwargs: dict[str, Any] = {"weights_only": True}
     if map_location is not None:
         load_kwargs["map_location"] = map_location
@@ -73,7 +86,7 @@ def load_checkpoint_weights(model: BaseModel, path: str | Path, *, map_location:
     return model
 
 
-def load_checkpoint(path: str | Path, *, map_location: object | None = None) -> BaseModel:
+def load_checkpoint(path: str | Path, *, map_location: object | None = None) -> CheckpointModel:
     from CESTA.models.registry import get_model_class
 
     meta = load_checkpoint_metadata(path)

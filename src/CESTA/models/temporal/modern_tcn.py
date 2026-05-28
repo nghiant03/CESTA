@@ -7,8 +7,6 @@ and residual connections for per-timestep fault diagnosis.
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import torch
 import torch.nn as nn
 
@@ -179,10 +177,3 @@ class ModernTCNClassifier(BaseModel):
             "layer_scale_init": self.layer_scale_init,
         }
 
-    @classmethod
-    def from_checkpoint(cls, path: str | Path) -> "ModernTCNClassifier":
-        from CESTA.artifacts import load_checkpoint
-
-        model = load_checkpoint(path)
-        assert isinstance(model, cls)
-        return model

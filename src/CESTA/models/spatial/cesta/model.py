@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import math
-from pathlib import Path
 from typing import ClassVar, Literal
 
 import torch
@@ -395,10 +394,3 @@ class CESTAClassifier(CESTASequenceMixin, CESTACommunicationMixin, BaseModel):
             "structured_request_topk": self.structured_request_topk,
         }
 
-    @classmethod
-    def from_checkpoint(cls, path: str | Path) -> CESTAClassifier:
-        from CESTA.artifacts import load_checkpoint
-
-        model = load_checkpoint(path)
-        assert isinstance(model, cls)
-        return model

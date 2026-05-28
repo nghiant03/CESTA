@@ -10,7 +10,7 @@ from typing import Any
 import numpy as np
 from numpy.typing import NDArray
 
-from CESTA.evaluation.metrics import ClassMetrics, confusion_matrix
+from CESTA.metrics import ClassMetrics, confusion_matrix
 from CESTA.schema.fault import FaultType
 
 
