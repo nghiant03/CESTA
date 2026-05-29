@@ -14,7 +14,7 @@ The main experimental question is:
 
 > Can selective receiver-side communication exceed strong temporal-only macro-F1 while reducing communication energy relative to dense spatial message passing?
 
-See [`docs/PROPOSAL.md`](docs/PROPOSAL.md) and [`docs/EXPERIMENT.md`](docs/EXPERIMENT.md) for the research motivation, hypotheses, baselines, current diagnosis results, and planned ablations.
+See [`docs/PROPOSAL.md`](docs/PROPOSAL.md), [`docs/EXPERIMENT.md`](docs/EXPERIMENT.md), [`docs/RESULT.md`](docs/RESULT.md), and [`PLAN.md`](PLAN.md) for the research motivation, protocol, current results, and remaining milestones.
 
 ## Highlights
 
@@ -203,4 +203,4 @@ The optional firmware stack targets ESP32-S3 devices collecting DHT11 readings a
 
 ## Repository status
 
-This is an active research repository. APIs and experiment settings may change as hypotheses are tested. Treat `docs/PROPOSAL.md`, `docs/EXPERIMENT.md`, and checked-in configs as the canonical references for current research intent and experimental protocol.
+This is an active research repository. APIs and experiment settings may change as hypotheses are tested. Treat `docs/PROPOSAL.md`, `docs/EXPERIMENT.md`, `docs/RESULT.md`, `PLAN.md`, and checked-in configs as the canonical references for current research intent and experimental protocol.

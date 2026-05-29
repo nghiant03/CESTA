@@ -51,8 +51,10 @@ notebooks/             # Jupyter notebooks for analysis
 
 ## Research Documentation
 
-- `docs/PROPOSAL.md` - Research proposal for CESTA, a communication-efficient spatial-temporal method using receiver-side learned request, GAT-inspired attention aggregation, and compression over existing graph edges.
-- `docs/EXPERIMENT.md` - Experiment plan for CESTA, including baselines, ablations, Pareto selection between Gumbel-Softmax and RL, GAT-inspired attention aggregation, and TX+RX energy metrics.
+- `docs/PROPOSAL.md` - Condensed research proposal for CESTA, including motivation, hypotheses, design constraints, baselines, scope, and risks.
+- `docs/EXPERIMENT.md` - Condensed experiment protocol for datasets, metrics, baselines, staged experiments, ablations, and reproducibility notes.
+- `docs/RESULT.md` - Current single-seed diagnosis results, interpretations, validity cautions, and next empirical decision.
+- `PLAN.md` - Remaining implementation and experiment milestones replacing the old task breakdown.
 
 
 ## Schema Module (`schema/`)
