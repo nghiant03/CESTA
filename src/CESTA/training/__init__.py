@@ -13,7 +13,6 @@ from CESTA.training.callbacks import (
     TrainMetrics,
 )
 from CESTA.training.loss import FocalLoss
-from CESTA.training.oversampling import oversample_minority
 from CESTA.training.trainer import Trainer, TrainResult, build_loss
 
 __all__ = [
@@ -27,5 +26,4 @@ __all__ = [
     "Trainer",
     "TrainingCallback",
     "build_loss",
-    "oversample_minority",
 ]

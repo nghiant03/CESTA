@@ -1,14 +1,55 @@
-"""Oversampling utilities for imbalanced datasets.
+"""Split-aware oversampling utilities for imbalanced datasets."""
 
-Provides window-level oversampling of minority (non-NORMAL) classes
-by duplicating windows that contain at least one non-normal label.
-"""
+from __future__ import annotations
 
 import numpy as np
 from numpy.typing import NDArray
 
+from CESTA.datasets.injected.windowed import WindowedSplit
 from CESTA.logging import logger
-from CESTA.schema.fault import FaultType
+
+
+def oversample_split(
+    split: WindowedSplit,
+    ratio: float = 1.0,
+    seed: int | None = None,
+    normal_class_id: int = 0,
+) -> WindowedSplit:
+    """Oversample windows containing labels other than ``normal_class_id``."""
+    y = split.y
+    flat_per_window = y.reshape(len(y), -1)
+    is_minority = np.any(flat_per_window != normal_class_id, axis=1)
+    minority_idx = np.where(is_minority)[0]
+    majority_idx = np.where(~is_minority)[0]
+
+    n_minority = len(minority_idx)
+    n_majority = len(majority_idx)
+
+    if n_minority == 0:
+        logger.warning("No minority samples found, skipping oversampling")
+        return split
+
+    target_minority = int(n_majority * ratio)
+    n_to_add = max(0, target_minority - n_minority)
+
+    if n_to_add == 0:
+        logger.info("Minority already meets target ratio, no oversampling needed")
+        return split
+
+    rng = np.random.default_rng(seed)
+    extra_idx = rng.choice(minority_idx, size=n_to_add, replace=True)
+    selected = np.concatenate([np.arange(len(y)), extra_idx])
+    shuffle = rng.permutation(len(selected))
+    selected = selected[shuffle]
+
+    sampled = split.select(selected)
+    logger.info(
+        "Oversampled: {} -> {} windows (added {} minority copies)",
+        len(split.X),
+        len(sampled.X),
+        n_to_add,
+    )
+    return sampled
 
 
 def oversample_minority(
@@ -18,48 +59,13 @@ def oversample_minority(
     seed: int | None = None,
     node_mask: NDArray[np.bool_] | None = None,
     edge_mask: NDArray[np.bool_] | None = None,
+    normal_class_id: int = 0,
 ) -> tuple[NDArray[np.float32], NDArray[np.int32], NDArray[np.bool_] | None, NDArray[np.bool_] | None]:
-    """Oversample windows containing non-NORMAL labels."""
-    normal_val = FaultType.NORMAL.value
-
-    flat_per_window = y.reshape(len(y), -1)
-    is_minority = np.any(flat_per_window != normal_val, axis=1)
-    minority_idx = np.where(is_minority)[0]
-    majority_idx = np.where(~is_minority)[0]
-
-    n_minority = len(minority_idx)
-    n_majority = len(majority_idx)
-
-    if n_minority == 0:
-        logger.warning("No minority samples found, skipping oversampling")
-        return X, y, node_mask, edge_mask
-
-    target_minority = int(n_majority * ratio)
-    n_to_add = max(0, target_minority - n_minority)
-
-    if n_to_add == 0:
-        logger.info("Minority already meets target ratio, no oversampling needed")
-        return X, y, node_mask, edge_mask
-
-    rng = np.random.default_rng(seed)
-    extra_idx = rng.choice(minority_idx, size=n_to_add, replace=True)
-
-    X_out = np.concatenate([X, X[extra_idx]], axis=0)
-    y_out = np.concatenate([y, y[extra_idx]], axis=0)
-    node_mask_out = np.concatenate([node_mask, node_mask[extra_idx]], axis=0) if node_mask is not None else None
-    edge_mask_out = np.concatenate([edge_mask, edge_mask[extra_idx]], axis=0) if edge_mask is not None else None
-
-    shuffle = rng.permutation(len(X_out))
-    X_out = X_out[shuffle]
-    y_out = y_out[shuffle]
-    node_mask_out = node_mask_out[shuffle] if node_mask_out is not None else None
-    edge_mask_out = edge_mask_out[shuffle] if edge_mask_out is not None else None
-
-    logger.info(
-        "Oversampled: {} -> {} windows (added {} minority copies)",
-        len(X),
-        len(X_out),
-        n_to_add,
+    """Compatibility wrapper around split-aware oversampling."""
+    split = oversample_split(
+        WindowedSplit(X=X, y=y, node_mask=node_mask, edge_mask=edge_mask),
+        ratio=ratio,
+        seed=seed,
+        normal_class_id=normal_class_id,
     )
-
-    return X_out, y_out, node_mask_out, edge_mask_out
+    return split.X, split.y, split.node_mask, split.edge_mask

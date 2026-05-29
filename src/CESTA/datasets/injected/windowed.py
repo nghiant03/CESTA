@@ -15,6 +15,26 @@ from numpy.typing import NDArray
 from CESTA.schema.window import DataSplitConfig, WindowConfig
 
 
+@dataclass(frozen=True)
+class WindowedSplit:
+    """One aligned windowed partition."""
+
+    X: NDArray[np.float32]
+    y: NDArray[np.int32]
+    node_mask: NDArray[np.bool_] | None = None
+    edge_mask: NDArray[np.bool_] | None = None
+    node_ids: NDArray[np.int64] | None = None
+
+    def select(self, indices: NDArray[np.integer[Any]]) -> "WindowedSplit":
+        return WindowedSplit(
+            X=self.X[indices],
+            y=self.y[indices],
+            node_mask=self.node_mask[indices] if self.node_mask is not None else None,
+            edge_mask=self.edge_mask[indices] if self.edge_mask is not None else None,
+            node_ids=self.node_ids[indices] if self.node_ids is not None else None,
+        )
+
+
 @dataclass
 class WindowedSplits:
     """Unified container for windowed train/val/test arrays.
@@ -48,6 +68,25 @@ class WindowedSplits:
     edge_mask_train: NDArray[np.bool_] | None = None
     edge_mask_val: NDArray[np.bool_] | None = None
     edge_mask_test: NDArray[np.bool_] | None = None
+
+    @property
+    def train(self) -> WindowedSplit:
+        return WindowedSplit(self.X_train, self.y_train, self.node_mask_train, self.edge_mask_train)
+
+    @train.setter
+    def train(self, split: WindowedSplit) -> None:
+        self.X_train = split.X
+        self.y_train = split.y
+        self.node_mask_train = split.node_mask
+        self.edge_mask_train = split.edge_mask
+
+    @property
+    def val(self) -> WindowedSplit:
+        return WindowedSplit(self.X_val, self.y_val, self.node_mask_val, self.edge_mask_val)
+
+    @property
+    def test(self) -> WindowedSplit:
+        return WindowedSplit(self.X_test, self.y_test, self.node_mask_test, self.edge_mask_test)
 
     @property
     def input_size(self) -> int:

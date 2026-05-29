@@ -18,6 +18,7 @@ import torch.nn as nn
 from numpy.typing import NDArray
 from torch.utils.data import DataLoader
 
+from CESTA.datasets.injected.windowed import WindowedSplit
 from CESTA.logging import logger
 from CESTA.metrics import ClassMetrics, compute_class_metrics, macro_f1
 from CESTA.models.base import BaseModel
@@ -37,7 +38,7 @@ from CESTA.training.objectives import (
     masked_loss,
     valid_predictions,
 )
-from CESTA.training.oversampling import oversample_minority
+from CESTA.training.oversampling import oversample_split
 
 
 def build_loss(
@@ -92,15 +93,17 @@ def _prepare_data(
             config.oversample_ratio,
             config.seed,
         )
-        X_out, y_out, node_mask_out, edge_mask_out = oversample_minority(
-            X, y, config.oversample_ratio, config.seed, node_mask, edge_mask
+        split = oversample_split(
+            WindowedSplit(X=X, y=y, node_mask=node_mask, edge_mask=edge_mask),
+            ratio=config.oversample_ratio,
+            seed=config.seed,
         )
         logger.info(
             "Oversampled: {} -> {} windows",
             len(X),
-            len(X_out),
+            len(split.X),
         )
-        return X_out, y_out, node_mask_out, edge_mask_out
+        return split.X, split.y, split.node_mask, split.edge_mask
     return X, y, node_mask, edge_mask
 
 
