@@ -238,8 +238,9 @@ ESP32 devices connect via WiFi to an on-prem MQTT broker (Mosquitto). Recommende
 1. **Fault Injection**: `uv run cesta inject intel_lab data/raw/Intel/data.txt data/injected/intel_lab`
 2. **Graph Preparation** (optional): `uv run cesta prepare graph data/injected/intel_lab data/raw/Intel/connectivity.txt`
 3. **Training**: `uv run cesta train config/model/lstm.yaml data/injected/intel_lab`
-4. **Hyperparameter Search** (optional): `uv run cesta optimize --data data/injected/intel_lab --model lstm --n-trials 20 --epochs 10`
-5. **Evaluation**: `uv run cesta evaluate --model runs/lstm/<run_id> --data data/injected/intel_lab`
+4. **Baseline Sweep**: `uv run python scripts/run_all_baselines.py` runs all default baseline configs on `data/injected/Intel_fault05`, `Intel_fault10`, `Intel_fault15`, and `Intel_fault20` with seeds `12`, `42`, and `1242`. It writes resumable progress under `runs/baseline_sweep_state.json` and `runs/baseline_sweep_events.jsonl`, then deletes those progress logs after all runs finish unless `--keep-progress-log` is set. Use `--dry-run` to inspect planned/remaining runs.
+5. **Hyperparameter Search** (optional): `uv run cesta optimize --data data/injected/intel_lab --model lstm --n-trials 20 --epochs 10`
+6. **Evaluation**: `uv run cesta evaluate --model runs/lstm/<run_id> --data data/injected/intel_lab`
 
 ## Optimization Module (`optimization/`)
 
