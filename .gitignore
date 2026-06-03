@@ -10,7 +10,7 @@ wheels/
 .venv
 
 # Data
-data/
+/data/
 
 # Output
 runs/

@@ -18,7 +18,7 @@ import torch.nn as nn
 from numpy.typing import NDArray
 from torch.utils.data import DataLoader
 
-from CESTA.datasets.injected.windowed import WindowedSplit
+from CESTA.datasets.windowed import WindowedSplit
 from CESTA.logging import logger
 from CESTA.metrics import ClassMetrics, compute_class_metrics, macro_f1
 from CESTA.models.base import BaseModel

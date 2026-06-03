@@ -2,7 +2,7 @@
 
 Collectors snapshot git, environment, and produce run identifiers
 that populate :class:`CESTA.schema.manifest.RunManifest`. Dataset
-identity comes from ``InjectedDataset.describe()``.
+identity comes from ``CESTADataset.describe()``.
 """
 
 from __future__ import annotations

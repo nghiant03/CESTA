@@ -76,6 +76,39 @@ class InjectionConfig(BaseModel):
         return self
 
 
+class GraphTransformConfig(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    connectivity_path: Path | None = None
+    mote_locs_path: Path | None = None
+    threshold: float = Field(default=0.5, ge=0.0, le=1.0)
+    seed: int = 0
+    rho: float = Field(default=0.5, ge=0.0, le=1.0)
+    q_bad_base: float = Field(default=0.02, ge=0.0)
+    q_recover_base: float = Field(default=0.20, ge=0.0)
+    bad_success_floor: float = Field(default=0.05, ge=0.0, le=1.0)
+    fallback_distance_m: float | None = Field(default=1.0, gt=0.0)
+
+
+class TransformConfig(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    injection: InjectionConfig = Field(default_factory=InjectionConfig)
+    graph: GraphTransformConfig = Field(default_factory=GraphTransformConfig)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _accept_flat_injection_config(cls, data: Any) -> Any:
+        if isinstance(data, dict) and "injection" not in data:
+            injection_fields = set(InjectionConfig.model_fields)
+            graph_fields = set(GraphTransformConfig.model_fields)
+            injection_data = {key: value for key, value in data.items() if key in injection_fields}
+            graph_data = {key: value for key, value in data.items() if key in graph_fields}
+            passthrough = {key: value for key, value in data.items() if key not in injection_fields | graph_fields}
+            return {**passthrough, "injection": injection_data, "graph": graph_data}
+        return data
+
+
 class TrainConfig(BaseModel):
     """Configuration for model training.
 

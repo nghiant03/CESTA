@@ -19,7 +19,7 @@ def train(
     ],
     data: Annotated[
         Path,
-        typer.Argument(help="Path to injected dataset directory"),
+        typer.Argument(help="Path to canonical CESTA dataset directory"),
     ],
     output: Annotated[
         Path | None,

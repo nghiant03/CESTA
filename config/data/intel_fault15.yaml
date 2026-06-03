@@ -1,0 +1,39 @@
+injection:
+  seed: 42
+  resample_freq: 5min
+  target_features: [temp]
+  all_features: [temp, humid, light, volt]
+  interpolation_method: linear
+  group_column: moteid
+
+  markov:
+    seed: 42
+    fault_configs:
+      - fault_type: SPIKE
+        transition_prob: 0.017647
+        average_duration: 2
+        params:
+          magnitude_sigma_range: [0.8, 2.0]
+          magnitude_range: [1.0, 4.0]
+      - fault_type: DRIFT
+        transition_prob: 0.003971
+        average_duration: 20
+        params:
+          drift_rate_sigma_range: [0.02, 0.08]
+          drift_rate_range: [0.05, 0.15]
+      - fault_type: STUCK
+        transition_prob: 0.006176
+        average_duration: 10
+        params:
+          jitter_sigma_factor: 0.05
+
+graph:
+  connectivity_path: data/raw/Intel/connectivity.txt
+  mote_locs_path: data/raw/Intel/mote_locs.txt
+  threshold: 0.5
+  seed: 42
+  rho: 0.5
+  q_bad_base: 0.02
+  q_recover_base: 0.20
+  bad_success_floor: 0.05
+  fallback_distance_m: 1.0

@@ -19,7 +19,7 @@ def optimize(
     ctx: typer.Context,
     data: Annotated[
         Optional[Path],
-        typer.Option("--data", "-d", help="Path to injected dataset directory"),
+        typer.Option("--data", "-d", help="Path to canonical CESTA dataset directory"),
     ] = None,
     model: Annotated[
         str,

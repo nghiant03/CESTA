@@ -30,9 +30,10 @@ src/CESTA/
 ├── workflows/         # Reusable train/evaluate orchestration above domain packages, below CLI
 ├── cli/               # Typer CLI with subcommands (inject, prepare, train, evaluate)
 ├── injection/         # Fault injection: Markov generator, fault injectors, registry
-├── datasets/          # Dataset loaders and injected containers
-│   ├── raw/           # Pre-injection: BaseDataset, IntelLabDataset, ESP32DHT11Dataset, registry
-│   └── injected/      # Post-injection: InjectedDataset, GraphDataset, windowing, loading
+├── datasets/          # Dataset loaders and canonical artifact containers
+│   ├── raw/           # Raw sources: BaseDataset, IntelLabDataset, registry
+│   ├── artifact.py    # Canonical CESTADataset, GraphMetadata, load_dataset
+│   └── windowed.py    # Windowed split containers and helpers
 ├── models/            # Deep learning model definitions
 │   ├── temporal/      # Temporal models: CNN1D, LSTM, GRU, Transformer, Autoformer, Informer, PatchTST, ModernTCN
 │   └── spatial/       # Spatial models: ST-GCN, CESTA
@@ -79,7 +80,7 @@ Single-file module with shared runtime helpers, used mainly by the train/evaluat
 - `collect_env_info(device)` - python / torch / cuda / host / device name / cesta version
 - `generate_run_id(model, seed, git)` - `<utc_ts>_<model>_seed<seed>_<shortsha>` (non-pure: samples wall clock)
 - `utc_now_iso()` - ISO-8601 UTC timestamp
-- `sha256_file(path)` - streaming SHA-256 of a file (used by `InjectedDataset.describe`)
+- `sha256_file(path)` - streaming SHA-256 of a file (used by `CESTADataset.describe`)
 
 ## Metrics
 
@@ -141,23 +142,21 @@ Pre-injection dataset loaders.
 - `IntelLabDataset` (`raw/intel_lab.py`) - Concrete loader for Intel Berkeley Research Lab sensor data.
 - `get_dataset` / `list_datasets` (`raw/__init__.py`) - Static raw dataset lookup backed by `_DATASET_LOADERS`.
 
-### Injected Sub-package (`datasets/injected/`)
+### Canonical Artifact Dataset
 
-Post-injection containers, graph topology, and windowing.
+Post-transform data is stored as a self-contained canonical artifact and loaded through `CESTADataset` (`datasets/artifact.py`). The required files are `dataset.csv`, `dataset_meta.json`, `graph_edges.npz`, `dynamic_link_mask.npz`, `node_positions.json`, and `edge_distances.npz`; legacy dataset file names are not supported.
 
-- `InjectedDataset` (`injected/tabular.py`) - Container with injected DataFrame + config + save/load. Has `.prepare(window_config, split_config, features, required_metadata) -> WindowedSplits` for per-group chronological windowing. Window and split settings are train-time data config, not injection config.
-- `GraphDataset` (`injected/graph.py`) - Subclass of `InjectedDataset` that adds dynamic directed graph topology (`edge_index`, `edge_prob`, node IDs, threshold, and link masks). Overrides `.prepare()` for graph-aligned windowing (concatenates all sensor features per timestep, keeps **per-node labels** of shape `(num_windows, window_size, num_nodes)`). When `required_metadata` does not include `"graph"`, delegates to `InjectedDataset.prepare()` so non-graph models work on graph datasets without shape mismatch. Graph split strategy can be `chronological` or `connectivity-chronological`; the latter finds the contiguous active communication block from available edge masks, splits train/val/test chronologically inside that block, and raises `ValueError` if each split cannot contain an active-edge graph window. Later no-communication periods should be evaluated separately as stress tests if needed. Returns `GraphMetadata` in `WindowedSplits.metadata["graph"]`. Built via `GraphDataset.from_connectivity(path, connectivity_path, threshold)` or loaded from disk with `GraphDataset.load(path)`.
-- `GraphMetadata` (`injected/graph.py`) - Typed dataclass holding canonical directed edge metadata: `edge_index`, `edge_prob`, `node_ids`, `num_nodes`, and dynamic-link simulation metadata. Stored in `WindowedSplits.metadata["graph"]` by `GraphDataset.prepare()`.
-- `WindowedSplit` / `WindowedSplits` (`injected/windowed.py`) - Unified dataclasses holding aligned windowed partitions and split collections + `metadata` dict. Includes input-shape metadata and split-availability flags. `WindowedSplit.select()` applies one index selection to features, labels, masks, and node IDs.
-- `load_dataset` (`injected/loading.py`) - Loads the appropriate dataset variant (`InjectedDataset` or `GraphDataset`) based on which files exist on disk.
-- `validate_features` (`injected/windowed.py`) - Shared feature-name validation used by both `InjectedDataset.prepare()` and `GraphDataset.prepare()`.
-- `collect_splits` (`injected/windowed.py`) - Shared helper to concatenate per-group window parts into final arrays with correct empty fallbacks. Accepts `label_trailing_shape` for per-node label dimensions.
+- `CESTADataset` (`datasets/artifact.py`) - Canonical runtime dataset with injected labels, directed graph topology, dynamic link masks, node positions, edge distances, save/load, summary, and `.prepare(window_config, split_config, features, required_metadata) -> WindowedSplits`.
+- `GraphMetadata` (`datasets/artifact.py`) - Typed dataclass holding directed edge metadata: `edge_index`, `edge_prob`, `node_ids`, `num_nodes`, dynamic-link metadata, and `edge_distance_m` aligned with `edge_index` columns.
+- `WindowedSplit` / `WindowedSplits` (`datasets/windowed.py`) - Unified dataclasses holding aligned windowed partitions and split collections + `metadata` dict. Includes input-shape metadata and split-availability flags. `WindowedSplit.select()` applies one index selection to features, labels, masks, and node IDs.
+- `load_dataset` (`datasets/artifact.py`) - Loads a canonical `CESTADataset` and requires all canonical artifact files.
+- `validate_features` and `collect_splits` (`datasets/windowed.py`) - Shared helpers for feature validation and aligned split assembly.
 
-Package-root exports are intentionally narrow: `CESTA.datasets` exports only `InjectedDataset`, `load_dataset`, `get_dataset`, and `list_datasets`; `CESTA.datasets.injected` exports only `InjectedDataset` and `load_dataset`. Internal graph/window/raw classes should be imported from their defining modules.
+Package-root exports are intentionally narrow: `CESTA.datasets` exports only `CESTADataset`, `GraphMetadata`, `load_dataset`, `get_dataset`, and `list_datasets`.
 
 ### Data Preparation Pattern
 
-All dataset types expose a `.prepare(window_config, split_config, required_metadata=...)` method returning `WindowedSplits`. The train CLI loads `TrainConfig.data.window` and `TrainConfig.data.split`, calls `load_dataset(path)`, then `dataset.prepare(window_config=config.data.window, split_config=config.data.split, required_metadata=model_cls.required_metadata)` dispatches polymorphically. When a `GraphDataset` receives `required_metadata` without `"graph"`, it falls back to temporal windows for non-graph models; if the requested split strategy is `connectivity-chronological`, the fallback uses the same active communication block and split boundaries as graph models, dropping only node windows with missing samples. Graph metadata travels via `WindowedSplits.metadata["graph"]`. Temporal models can request `node_identity` metadata by setting `node_embedding_dim > 0` in `model_kwargs`; the train/evaluate loaders then pass per-window node IDs through `TemporalWindowBatch`.
+All canonical datasets expose a `.prepare(window_config, split_config, required_metadata=...)` method returning `WindowedSplits`. The train CLI loads `TrainConfig.data.window` and `TrainConfig.data.split`, calls `load_dataset(path)`, then `dataset.prepare(window_config=config.data.window, split_config=config.data.split, required_metadata=model_cls.required_metadata)`. When graph metadata is not requested, graph-aligned canonical datasets fall back to temporal windows for non-graph models; if the requested split strategy is `connectivity-chronological`, the fallback uses the same active communication block and split boundaries as graph models, dropping only node windows with missing samples. Graph metadata travels via `WindowedSplits.metadata["graph"]`. Temporal models can request `node_identity` metadata by setting `node_embedding_dim > 0` in `model_kwargs`; the train/evaluate loaders then pass per-window node IDs through `TemporalWindowBatch`.
 
 `create_model` accepts `metadata` and automatically validates model requirements and extracts architecture-specific kwargs (e.g. `num_nodes`, `edge_index`, and `edge_prob` for graph models).
 
@@ -235,12 +234,11 @@ ESP32 devices connect via WiFi to an on-prem MQTT broker (Mosquitto). Recommende
 
 ## Workflow
 
-1. **Fault Injection**: `uv run cesta inject intel_lab data/raw/Intel/data.txt data/injected/intel_lab`
-2. **Graph Preparation** (optional): `uv run cesta prepare graph data/injected/intel_lab data/raw/Intel/connectivity.txt`
-3. **Training**: `uv run cesta train config/model/lstm.yaml data/injected/intel_lab`
-4. **Baseline Sweep**: `uv run python scripts/run_all_baselines.py` runs all default baseline configs on `data/injected/Intel_fault05`, `Intel_fault10`, `Intel_fault15`, and `Intel_fault20` with seeds `12`, `42`, and `1242`. It writes resumable progress under `runs/baseline_sweep_state.json` and `runs/baseline_sweep_events.jsonl`, then deletes those progress logs after all runs finish unless `--keep-progress-log` is set. Use `--dry-run` to inspect planned/remaining runs.
-5. **Hyperparameter Search** (optional): `uv run cesta optimize --data data/injected/intel_lab --model lstm --n-trials 20 --epochs 10`
-6. **Evaluation**: `uv run cesta evaluate --model runs/lstm/<run_id> --data data/injected/intel_lab`
+1. **Data Transform**: `uv run cesta transform intel_lab data/raw/Intel/data.txt data/datasets/intel_lab --config config/data/intel_fault15.yaml`
+2. **Training**: `uv run cesta train config/model/lstm.yaml data/canon/intel_lab`
+4. **Baseline Sweep**: `uv run python scripts/run_all_baselines.py` runs all default baseline configs on `data/canon/Intel_fault05`, `Intel_fault10`, `Intel_fault15`, and `Intel_fault20` with seeds `12`, `42`, and `1242`. It writes resumable progress under `runs/baseline_sweep_state.json` and `runs/baseline_sweep_events.jsonl`, then deletes those progress logs after all runs finish unless `--keep-progress-log` is set. Use `--dry-run` to inspect planned/remaining runs.
+3. **Hyperparameter Search** (optional): `uv run cesta optimize --data data/canon/intel_lab --model lstm --n-trials 20 --epochs 10`
+4. **Evaluation**: `uv run cesta evaluate --model runs/lstm/<run_id> --data data/canon/intel_lab`
 
 ## Optimization Module (`optimization/`)
 
@@ -283,9 +281,7 @@ The CLI uses **Typer** with a centralized command namespace:
 
 ```
 cesta                    # Main entry point
-├── inject              # Run fault injection
-├── prepare             # Data preparation subcommands
-│   └── graph           # Add graph topology to injected dataset
+├── transform           # Transform raw data into a canonical dataset
 ├── train               # Train a model
 ├── evaluate            # Evaluate a model
 ├── optimize            # Run Optuna hyperparameter optimization
@@ -345,13 +341,13 @@ To add a new model that needs special metadata:
 
 `CESTAClassifier` is registered as `cesta` and requires graph metadata. It expects graph-aligned input `(batch, window_size, num_nodes * features_per_node)` and returns logits `(batch, window_size, num_nodes, num_classes)`. Supported `communication_mode` values are `"none"` for the temporal-only fixed backbone, `"dense"` for all non-self graph edges with full hidden-state messages, and `"gumbel_request"` for receiver-side straight-through Gumbel request gating with full hidden-state messages. The per-node temporal encoder supports `bidirectional=True`; attention, fusion, classifier, gate features, and transmitted-bit estimates use the doubled encoder output size when enabled. Gumbel request gating is per receiver-sender edge using receiver local hidden state, local classifier entropy, local classifier margin, and edge probability from graph metadata; it does not inspect sender hidden state before requesting. Dense and Gumbel modes use GAT-inspired single-head attention aggregation: Q from local hidden, K/V from received neighbor hiddens, softmax over received set only, zero-vector when no neighbors requested. Optional `use_neighbor_belief=True` appends sender local diagnostic belief features (class probabilities, entropy, margin) to each hidden-state message and lets fusion/logit correction consume neighbor belief means and local-neighbor belief contrasts; transmitted-bit estimates include those extra belief fields. Optional `use_boundary_head=True` predicts per-node change-point logits exposed via `last_boundary_logits`; `TrainConfig.boundary_loss_weight` adds focal BCE supervision on valid label transitions with optional temporal dilation, and `use_boundary_gated_correction=True` softly boosts logit correction near predicted boundaries. Optional `use_crf=True` adds a learned linear-chain transition matrix over class labels; `TrainConfig.crf_loss_weight` adds masked CRF negative log-likelihood during training and the trainer/evaluator use Viterbi decoding for predictions. Optional `use_communication_conditioned_correction=True` augments logit correction with communicated-vs-local belief features so correction can learn when received neighbor evidence should override or confirm local evidence. Optional `structured_request_topk > 0` reparameterizes Gumbel request gating into a receiver-side need gate plus top-k neighbor ranker that still uses only receiver local state, receiver uncertainty, and edge metadata before communication. `TrainConfig.voi_gate_loss_weight` adds a value-of-information gate loss that penalizes communication when communicated logits fail to improve the correct-class logit over local-only logits. `TrainConfig.counterfactual_voi_loss_weight` adds a per-node/timestep counterfactual VOI objective using local versus communicated correct-class logits and receiver communication activity. Graph fusion uses `local_hidden + sigmoid(graph_residual_logit) * fused`, initialized by `graph_residual_init` (default `1.0`; set `0.1` in residual diagnosis configs) to preserve local evidence while learning graph-update strength. The latest forward communication counters are available via `last_communication_stats` with active ratio, requested/possible edge counts, transmitted-bit estimate, and compression-count fields; `auxiliary_loss` exposes a gradient-preserving communication ratio tensor for generic trainer penalties. `TrainConfig.communication_penalty_weight` adds that auxiliary loss when present. Evaluation writes `communication_metrics.json` for communication-aware models.
 
-## CLI Options (inject run)
+## CLI Options (transform run)
 
-Large injection settings live in YAML/JSON config files and are validated directly with Pydantic.
+Large data transformation settings live in YAML/JSON config files and are validated directly with Pydantic.
 
 ```
 DATASET                Dataset name (required positional argument)
-DATA_PATH              Path to raw data file (required positional argument)
-OUTPUT                 Output path for injected dataset directory (required positional argument)
--c, --config           Path to YAML/JSON injection config file
+RAW_PATH               Path to raw data file or directory (required positional argument)
+OUTPUT                 Output path for canonical dataset directory (required positional argument)
+-c, --config           Path to YAML/JSON transform config file
 ```

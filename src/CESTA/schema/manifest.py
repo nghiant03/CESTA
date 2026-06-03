@@ -7,7 +7,7 @@ It is written as ``manifest.json`` inside each run directory.
 
 Runtime collectors that populate these models live in
 :mod:`CESTA.utils`; ``DatasetInfo`` is produced by
-``InjectedDataset.describe()``.
+``CESTADataset.describe()``.
 """
 
 from __future__ import annotations
@@ -45,7 +45,7 @@ class GitInfo(BaseModel):
 
 
 class DatasetInfo(BaseModel):
-    """Identity of the injected dataset used for the run."""
+    """Identity of the canonical dataset used for the run."""
 
     model_config = ConfigDict(frozen=True)
 

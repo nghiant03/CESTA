@@ -10,13 +10,13 @@ CESTA will improve average macro-F1 over the best temporal-only model per fault 
 
 ## Data
 
-Use the harder Intel injected graph datasets:
+Use the harder canonical Intel graph datasets:
 
 ```text
-data/injected/Intel_fault05
-data/injected/Intel_fault10
-data/injected/Intel_fault15
-data/injected/Intel_fault20
+data/canon/Intel_fault05
+data/canon/Intel_fault10
+data/canon/Intel_fault15
+data/canon/Intel_fault20
 ```
 
 Use temp-only input for comparability:
@@ -25,13 +25,13 @@ Use temp-only input for comparability:
 features: ["temp"]
 ```
 
-Dynamic graph preparation uses directed candidate edges from `connectivity.txt` and a once-sampled bursty link-success mask:
+`cesta transform` serializes directed candidate edges from `connectivity.txt`, node positions from `mote_locs.txt`, edge distances, and a once-sampled bursty link-success mask:
 
 ```text
 active_edge[t,e] = link_success[t,e] & node_observed[t,sender(e)] & node_observed[t,receiver(e)]
 ```
 
-Missing node labels are stored as `-1` and excluded by masked loss/metrics. Complete-case timestamp filtering is not viable because no timestamp contains all 55 Intel nodes. The decisive development dataset is `data/injected/Intel_fault15`.
+Missing node labels are stored as `-1` and excluded by masked loss/metrics. Complete-case timestamp filtering is not viable because no timestamp contains all 55 Intel nodes. The decisive development dataset is `data/canon/Intel_fault15`.
 
 ## Temporal targets
 

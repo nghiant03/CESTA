@@ -8,7 +8,7 @@ import numpy as np
 import pandas as pd
 from loguru import logger
 
-from CESTA.datasets import InjectedDataset
+from CESTA.datasets.artifact import CESTADataset
 from CESTA.datasets.raw.base import BaseDataset
 from CESTA.injection.markov import MarkovStateGenerator
 from CESTA.injection.registry import get_injector
@@ -22,7 +22,7 @@ class FaultInjector:
         1. Load and preprocess raw dataset
         2. Generate Markov state sequences per group
         3. Apply fault injectors based on states
-        4. Return InjectedDataset wrapping the injected DataFrame
+        4. Return a canonical dataset or transformed DataFrame
     """
 
     def __init__(self, config: InjectionConfig) -> None:
@@ -30,31 +30,32 @@ class FaultInjector:
         self.rng = np.random.default_rng(config.seed)
         self.markov_gen = MarkovStateGenerator(config.markov, self.rng)
 
-    def run(self, dataset: BaseDataset) -> InjectedDataset:
-        """Execute the full injection pipeline.
+    def run(self, dataset: BaseDataset) -> CESTADataset:
+        """Execute fault injection and return a canonical dataset without graph edges."""
+        df, features = self.run_to_frame(dataset)
+        group_col = self.config.group_column
+        node_ids = sorted(int(g) for g in df[group_col].unique()) if group_col in df.columns else [0]
+        timestamps = sorted(df[dataset.timestamp_column].unique()) if dataset.timestamp_column in df.columns else list(range(len(df)))
+        return CESTADataset(
+            df=df,
+            config=self.config,
+            feature_names=features,
+            dataset_name=dataset.name,
+            timestamp_column=dataset.timestamp_column,
+            node_ids=node_ids,
+            link_mask=np.empty((len(timestamps), 0), dtype=np.bool_),
+        )
 
-        Args:
-            dataset: A dataset loader instance.
-
-        Returns:
-            InjectedDataset wrapping the injected DataFrame with fault_state column.
-        """
+    def run_to_frame(self, dataset: BaseDataset) -> tuple[pd.DataFrame, list[str]]:
         df = dataset.load()
         df = dataset.preprocess(
             df,
             resample_freq=self.config.resample_freq,
             interpolation_method=self.config.interpolation_method,
         )
-
         df, _ = self._inject_faults(df, dataset.group_column)
-
         features = [f for f in self.config.all_features if f in df.columns]
-
-        return InjectedDataset(
-            df=df,
-            config=self.config,
-            feature_names=features,
-        )
+        return df, features
 
     def _inject_faults(
         self, df: pd.DataFrame, group_column: str

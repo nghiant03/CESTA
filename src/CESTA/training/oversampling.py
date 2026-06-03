@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy as np
 from numpy.typing import NDArray
 
-from CESTA.datasets.injected.windowed import WindowedSplit
+from CESTA.datasets.windowed import WindowedSplit
 from CESTA.logging import logger
 
 

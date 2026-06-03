@@ -120,7 +120,7 @@ def _extract_metadata_kwargs(
     kwargs: dict[str, object] = {}
 
     if "graph" in required:
-        from CESTA.datasets.injected.graph import GraphMetadata
+        from CESTA.datasets.artifact import GraphMetadata
 
         graph_meta = metadata.get("graph")
         if isinstance(graph_meta, GraphMetadata):

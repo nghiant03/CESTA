@@ -2,7 +2,7 @@
 
 **Communication-Efficient Spatial-Temporal Aggregation for sensor fault diagnosis.**
 
-CESTA is a research codebase for studying communication-aware fault diagnosis in sensor networks. It provides a reproducible pipeline for fault injection, graph-aware dataset preparation, temporal and spatial-temporal model training, communication-cost evaluation, and run artifact persistence.
+CESTA is a research codebase for studying communication-aware fault diagnosis in sensor networks. It provides a reproducible pipeline for raw-data transformation, temporal and spatial-temporal model training, communication-cost evaluation, and run artifact persistence.
 
 The current research focus is a receiver-side learned request mechanism: each sensor node first reasons from local temporal evidence, then selectively requests neighbor information over existing graph edges when communication is expected to improve diagnosis.
 
@@ -20,9 +20,9 @@ See [`docs/PROPOSAL.md`](docs/PROPOSAL.md), [`docs/EXPERIMENT.md`](docs/EXPERIME
 
 - Markov-chain injection of realistic sensor faults: `SPIKE`, `DRIFT`, and `STUCK`.
 - Temporal baselines: CNN1D, LSTM, GRU, Transformer, Autoformer, Informer, PatchTST, and ModernTCN.
-- Spatial-temporal baselines: ST-GCN and dense CESTA over graph-prepared datasets.
+- Spatial-temporal baselines: ST-GCN and dense CESTA over canonical graph-aware datasets.
 - Communication-aware CESTA with receiver-side Gumbel request gating, optional neighbor belief messages, communication-conditioned correction, VOI-style objectives, and CRF sequence decoding.
-- Dynamic graph preparation from Intel connectivity data, including graph-aligned windows, node masks, edge masks, and per-node labels.
+- Canonical dataset transformation from raw readings, fault injection, Intel connectivity, node positions, dynamic link masks, and edge distances.
 - Reproducible run artifacts: manifests, configs, checkpoints, histories, evaluation metrics, predictions, and communication metrics.
 - Optuna hyperparameter optimization for reproducible model selection.
 - Optional ESP32-S3 Rust firmware for lab sensor collection over MQTT.
@@ -53,35 +53,31 @@ uv run cesta list datasets
 
 ## Quick start
 
-The standard workflow is fault injection, optional graph preparation, training, and evaluation.
+The standard workflow is transform, training, and evaluation.
 
 ```bash
-# 1. Inject faults into raw Intel sensor data
-uv run cesta inject intel_lab data/raw/Intel/data.txt data/injected/intel_lab
+# 1. Transform raw Intel sensor data into a canonical dataset
+uv run cesta transform intel_lab data/raw/Intel/data.txt data/canon/intel_lab --config config/data/intel_fault15.yaml
 
-# 2. Add graph topology for spatial-temporal models
-uv run cesta prepare graph data/injected/intel_lab data/raw/Intel/connectivity.txt
+# 2. Train a temporal baseline
+uv run cesta train config/model/gru.yaml data/canon/intel_lab
 
-# 3. Train a temporal baseline
-uv run cesta train config/model/gru.yaml data/injected/intel_lab
+# 3. Train CESTA
+uv run cesta train config/model/cesta.yaml data/canon/intel_lab
 
-# 4. Train CESTA
-uv run cesta train config/model/cesta.yaml data/injected/intel_lab
-
-# 5. Evaluate a run
-uv run cesta evaluate --model runs/cesta/<run_id> --data data/injected/intel_lab
+# 4. Evaluate a run
+uv run cesta evaluate --model runs/cesta/<run_id> --data data/canon/intel_lab
 ```
 
 Diagnosis-focused configurations live under `config/model/diagnosis/` and encode the current higher-end research settings for dense, request-gated, residual, and capacity-matched CESTA variants.
 
 ## Data pipeline
 
-CESTA separates the data lifecycle into raw datasets and injected datasets.
+CESTA separates the data lifecycle into raw sources and canonical datasets.
 
 1. Raw loaders normalize source data into a common sensor-time table.
-2. Fault injection adds synthetic labels and corrupted readings using configurable Markov transitions.
-3. Graph preparation attaches topology and dynamic communication metadata.
-4. Window preparation produces chronological train/validation/test splits for temporal or graph-aligned training.
+2. `cesta transform` adds synthetic fault labels, graph topology, dynamic communication masks, node positions, and edge distances.
+3. Window preparation produces chronological train/validation/test splits for temporal or graph-aligned training.
 
 Graph models receive per-window tensors with node masks and edge masks, so missing node readings and unavailable communication links can be handled without requiring complete-case timestamps.
 
@@ -90,7 +86,7 @@ Graph models receive per-window tensors with node masks and edge masks, so missi
 | Family | Models | Notes |
 |---|---|---|
 | Temporal | `cnn1d`, `lstm`, `gru`, `transformer`, `autoformer`, `informer`, `patchtst`, `modern_tcn` | Strong local-only baselines for fault diagnosis. |
-| Spatial-temporal | `stgcn`, `cesta` | Require graph metadata from `prepare graph`. |
+| Spatial-temporal | `stgcn`, `cesta` | Require graph metadata serialized by `cesta transform`. |
 | Communication-aware | `cesta` | Supports dense, no-communication, and receiver-side Gumbel request modes. |
 
 CESTA can be configured with graph residual fusion, learned request gates, communication penalties, neighbor belief features, boundary supervision, communication-conditioned correction, structured top-k requests, VOI-style gate loss, and CRF decoding.
@@ -100,8 +96,8 @@ CESTA can be configured with graph residual fusion, learned request gates, commu
 Training is config-file-first. Model, optimizer, data-window, split, loss, and communication settings are stored in YAML and validated by Pydantic.
 
 ```bash
-uv run cesta train config/model/lstm.yaml data/injected/intel_lab
-uv run cesta train config/model/diagnosis/cesta_diag_70_15_15_dense.yaml data/injected/Intel_fault15
+uv run cesta train config/model/lstm.yaml data/canon/intel_lab
+uv run cesta train config/model/diagnosis/cesta_diag_70_15_15_dense.yaml data/canon/Intel_fault15
 ```
 
 Large command surfaces use YAML or JSON config files; smaller utility commands keep direct CLI options. This keeps experiment settings reproducible and avoids hidden command-line state.
@@ -126,9 +122,7 @@ Communication-aware models also write communication metrics during evaluation wh
 
 ```text
 cesta
-├── inject              # Inject faults into raw sensor data
-├── prepare
-│   └── graph           # Attach graph topology and communication metadata
+├── transform           # Transform raw data into a canonical dataset
 ├── train               # Train from a YAML/JSON config
 ├── evaluate            # Evaluate a trained run
 ├── optimize            # Run Optuna hyperparameter search
@@ -148,7 +142,7 @@ src/CESTA/
 ├── workflows/         # Reusable train/evaluate orchestration
 ├── cli/               # Typer CLI
 ├── injection/         # Markov generator and fault injectors
-├── datasets/          # Raw and injected dataset handling
+├── datasets/          # Raw loaders and canonical dataset artifacts
 ├── models/            # Temporal, spatial, and CESTA model definitions
 ├── training/          # Trainer, losses, callbacks, objectives
 ├── evaluation/        # Metrics, evaluator, communication reporting
@@ -156,7 +150,7 @@ src/CESTA/
 ├── utils.py           # Runtime helpers
 └── seed.py            # Reproducibility helper
 
-config/                # Model and diagnosis YAML configs
+config/                # Data transform, model, and diagnosis YAML configs
 docs/                  # Proposal, experiment plan, and research notes
 firmware/              # ESP32-S3 Rust firmware for optional data collection
 notebooks/             # Analysis notebooks

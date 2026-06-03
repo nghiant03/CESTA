@@ -8,7 +8,7 @@ from numpy.typing import NDArray
 from torch.utils.data import DataLoader, TensorDataset
 
 from CESTA.batch import GraphWindowBatch, TemporalWindowBatch
-from CESTA.datasets.injected.graph import GraphMetadata
+from CESTA.datasets.artifact import GraphMetadata
 from CESTA.models.base import BaseModel
 from CESTA.training.graph_batch import GraphWindowDataset, TemporalWindowDataset, collate_graph_batch, collate_temporal_batch
 

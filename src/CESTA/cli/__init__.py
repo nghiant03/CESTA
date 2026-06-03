@@ -7,10 +7,9 @@ from rich.console import Console
 from rich.table import Table
 
 from CESTA.cli.evaluate import evaluate
-from CESTA.cli.inject import inject
 from CESTA.cli.optimize import app as optimize_app
-from CESTA.cli.prepare import app as prepare_app
 from CESTA.cli.train import train
+from CESTA.cli.transform import transform
 from CESTA.logging import configure_logging
 
 app = typer.Typer(
@@ -65,8 +64,7 @@ def list_items(
     raise typer.BadParameter("Expected one of: datasets, models, metrics")
 
 
-app.command("inject", help="Inject faults into sensor datasets")(inject)
-app.add_typer(prepare_app, name="prepare", help="Prepare dataset variants (e.g. graph topology)")
+app.command("transform", help="Transform raw data into a canonical CESTA dataset")(transform)
 app.command("train", help="Train deep learning models")(train)
 app.command("evaluate", help="Evaluate trained models")(evaluate)
 app.add_typer(optimize_app, name="optimize", help="Hyperparameter optimization with Optuna")

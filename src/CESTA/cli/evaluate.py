@@ -18,7 +18,7 @@ def evaluate(
     ],
     data: Annotated[
         Path,
-        typer.Option("--data", "-d", help="Path to injected dataset directory"),
+        typer.Option("--data", "-d", help="Path to canonical CESTA dataset directory"),
     ],
     output: Annotated[
         Path | None,

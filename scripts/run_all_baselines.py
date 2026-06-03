@@ -27,10 +27,10 @@ DEFAULT_CONFIGS = (
     Path("config/model/cesta.yaml"),
 )
 DEFAULT_DATASETS = (
-    Path("data/injected/Intel_fault05"),
-    Path("data/injected/Intel_fault10"),
-    Path("data/injected/Intel_fault15"),
-    Path("data/injected/Intel_fault20"),
+    Path("data/canon/Intel_fault05"),
+    Path("data/canon/Intel_fault10"),
+    Path("data/canon/Intel_fault15"),
+    Path("data/canon/Intel_fault20"),
 )
 DEFAULT_SEEDS = (12, 42, 1242)
 
@@ -65,10 +65,10 @@ def utc_now() -> str:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Run every baseline config on the four injected datasets with seeds 12, 42, and 1242.")
+    parser = argparse.ArgumentParser(description="Run every baseline config on the four canonical datasets with seeds 12, 42, and 1242.")
     parser.add_argument("--runs-dir", type=Path, default=Path("runs"), help="Root directory for run outputs and progress logs.")
     parser.add_argument("--configs", nargs="+", type=Path, default=list(DEFAULT_CONFIGS), help="Training config files to run.")
-    parser.add_argument("--datasets", nargs="+", type=Path, default=list(DEFAULT_DATASETS), help="Injected dataset directories to train on.")
+    parser.add_argument("--datasets", nargs="+", type=Path, default=list(DEFAULT_DATASETS), help="Canonical CESTA dataset directories to train on.")
     parser.add_argument("--seeds", nargs="+", type=int, default=list(DEFAULT_SEEDS), help="Seeds to run for each config/dataset pair.")
     parser.add_argument("--runner", nargs="+", default=["uv", "run", "cesta"], help="Command prefix used to invoke the CESTA CLI.")
     parser.add_argument("--early-stopping", action="store_true", help="Forward --early-stopping to cesta train.")
