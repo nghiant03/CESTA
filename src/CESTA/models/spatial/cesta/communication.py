@@ -14,6 +14,9 @@ class CommunicationStats(TypedDict):
     full_embedding_message_count: float
     compressed_message_count: float
     average_compression_ratio: float
+    bits_per_message: float
+    requested_edge_counts: list[float]
+    possible_edge_counts: list[float]
 
 
 class CESTACommunicationMixin:
@@ -279,65 +282,81 @@ class CESTACommunicationMixin:
         message_mask[:, :, receiver, sender] = active
         return message_mask
 
-    def _zero_communication_stats(self) -> CommunicationStats:
+    def _zero_communication_stats(
+        self,
+        possible_mask: torch.Tensor | None = None,
+        edge_index: torch.Tensor | None = None,
+    ) -> CommunicationStats:
+        if possible_mask is None:
+            possible_edge_counts = [0.0] * int(self._possible_edge_count())
+            possible_edge_count = 0.0
+        else:
+            possible_edge_count_tensor = self._edge_counts_from_message_mask(possible_mask, edge_index=edge_index)
+            possible_edge_counts = [float(x) for x in possible_edge_count_tensor.detach().cpu().tolist()]
+            possible_edge_count = float(possible_edge_count_tensor.sum().detach().cpu().item())
         return {
             "active_request_ratio": 0.0,
             "requested_edge_count": 0.0,
-            "possible_edge_count": self._possible_edge_count(),
+            "possible_edge_count": possible_edge_count,
             "transmitted_bits_estimate": 0.0,
             "full_embedding_message_count": 0.0,
             "compressed_message_count": 0.0,
             "average_compression_ratio": 0.0,
+            "bits_per_message": float(self._bits_per_message()),
+            "requested_edge_counts": [0.0] * len(possible_edge_counts),
+            "possible_edge_counts": possible_edge_counts,
         }
 
     def _dense_communication_stats(
         self,
         possible_mask: torch.Tensor,
-        batch: int,
-        seq_len: int,
-        device: torch.device,
+        edge_index: torch.Tensor | None = None,
     ) -> CommunicationStats:
-        if possible_mask.dim() == 2:
-            possible_edges = torch.tensor(
-                float(possible_mask.sum().item() * batch * seq_len),
-                dtype=torch.float32,
-                device=device,
-            )
-        else:
-            possible_edges = possible_mask.sum()
+        possible_edge_counts = self._edge_counts_from_message_mask(possible_mask, edge_index=edge_index)
+        possible_edges = possible_edge_counts.sum()
         requested_edges = possible_edges
-        transmitted_bits = requested_edges * self._message_size() * self.precision_bits
+        bits_per_message = self._bits_per_message()
+        transmitted_bits = requested_edges * bits_per_message
+        possible_count_value = possible_edges.detach().cpu().item()
+        edge_counts = [float(x) for x in possible_edge_counts.detach().cpu().tolist()]
         return {
-            "active_request_ratio": 1.0 if possible_edges.detach().cpu().item() > 0 else 0.0,
+            "active_request_ratio": 1.0 if possible_count_value > 0 else 0.0,
             "requested_edge_count": float(requested_edges.detach().cpu().item()),
-            "possible_edge_count": float(possible_edges.detach().cpu().item()),
+            "possible_edge_count": float(possible_count_value),
             "transmitted_bits_estimate": float(transmitted_bits.detach().cpu().item()),
             "full_embedding_message_count": float(requested_edges.detach().cpu().item()),
             "compressed_message_count": 0.0,
-            "average_compression_ratio": 1.0 if possible_edges.detach().cpu().item() > 0 else 0.0,
+            "average_compression_ratio": 1.0 if possible_count_value > 0 else 0.0,
+            "bits_per_message": float(bits_per_message),
+            "requested_edge_counts": edge_counts,
+            "possible_edge_counts": edge_counts,
         }
 
     def _request_communication_stats(
         self,
         request_mask: torch.Tensor,
         possible_mask: torch.Tensor,
+        edge_index: torch.Tensor | None = None,
     ) -> CommunicationStats:
-        possible_edges = possible_mask.sum()
-        requested_edges = request_mask.sum()
+        possible_edge_counts = self._edge_counts_from_message_mask(possible_mask, edge_index=edge_index)
+        requested_edge_counts = self._edge_counts_from_message_mask(request_mask, edge_index=edge_index)
+        possible_edges = possible_edge_counts.sum()
+        requested_edges = requested_edge_counts.sum()
         active_ratio = requested_edges / possible_edges.clamp_min(1.0)
-        transmitted_bits = requested_edges * self._message_size() * self.precision_bits
+        bits_per_message = self._bits_per_message()
+        transmitted_bits = requested_edges * bits_per_message
+        requested_count_value = requested_edges.detach().cpu().item()
         return {
             "active_request_ratio": float(active_ratio.detach().cpu().item()),
-            "requested_edge_count": float(requested_edges.detach().cpu().item()),
+            "requested_edge_count": float(requested_count_value),
             "possible_edge_count": float(possible_edges.detach().cpu().item()),
             "transmitted_bits_estimate": float(transmitted_bits.detach().cpu().item()),
-            "full_embedding_message_count": float(
-                requested_edges.detach().cpu().item()
-            ),
+            "full_embedding_message_count": float(requested_count_value),
             "compressed_message_count": 0.0,
-            "average_compression_ratio": 1.0
-            if requested_edges.detach().cpu().item() > 0
-            else 0.0,
+            "average_compression_ratio": 1.0 if requested_count_value > 0 else 0.0,
+            "bits_per_message": float(bits_per_message),
+            "requested_edge_counts": [float(x) for x in requested_edge_counts.detach().cpu().tolist()],
+            "possible_edge_counts": [float(x) for x in possible_edge_counts.detach().cpu().tolist()],
         }
 
     @staticmethod
@@ -363,6 +382,24 @@ class CESTACommunicationMixin:
 
     def _message_size(self) -> int:
         return self.encoder_output_size + (self.neighbor_belief_size if self.use_neighbor_belief else 0)
+
+    def _bits_per_message(self) -> int:
+        return self._message_size() * self.precision_bits
+
+    def _edge_counts_from_message_mask(
+        self,
+        message_mask: torch.Tensor,
+        edge_index: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        active_edge_index = edge_index if edge_index is not None else cast(torch.Tensor, self.edge_index)
+        active_edge_index = active_edge_index.to(device=message_mask.device, dtype=torch.long)
+        if active_edge_index.numel() == 0:
+            return torch.empty((0,), dtype=message_mask.dtype, device=message_mask.device)
+        sender = active_edge_index[0]
+        receiver = active_edge_index[1]
+        if message_mask.dim() == 2:
+            return message_mask[receiver, sender]
+        return message_mask[:, :, receiver, sender].sum(dim=(0, 1))
 
     def _compute_gate_entropy(
         self,

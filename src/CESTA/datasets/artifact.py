@@ -316,7 +316,7 @@ class CESTADataset:
             num_nodes=self.num_nodes,
             threshold=self.threshold,
             edge_distance_m=self.edge_distance_m,
-            dynamic_link_seed=graph_meta.get("seed"),
+            dynamic_link_seed=graph_meta.get("dynamic_link_seed"),
             burst_params=dict(graph_meta.get("burst_params", {})),
             timestamps=[str(ts) for ts in timestamps],
             link_mask_shape=tuple(self.link_mask.shape),

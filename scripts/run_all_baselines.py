@@ -27,10 +27,10 @@ DEFAULT_CONFIGS = (
     Path("config/model/cesta.yaml"),
 )
 DEFAULT_DATASETS = (
-    Path("data/canon/Intel_fault05"),
-    Path("data/canon/Intel_fault10"),
-    Path("data/canon/Intel_fault15"),
-    Path("data/canon/Intel_fault20"),
+    Path("data/datasets/Intel_fault05"),
+    Path("data/datasets/Intel_fault10"),
+    Path("data/datasets/Intel_fault15"),
+    Path("data/datasets/Intel_fault20"),
 )
 DEFAULT_SEEDS = (12, 42, 1242)
 
@@ -144,6 +144,7 @@ def load_progress(path: Path, total: int, restart: bool) -> dict[str, Any]:
     progress.setdefault("completed", {})
     progress.setdefault("failures", [])
     progress["total"] = total
+    progress["current"] = None
     progress["updated_at"] = utc_now()
     return progress
 
@@ -217,6 +218,9 @@ def main() -> int:
     if args.dry_run:
         print(f"Planned runs: {len(tasks)} | already completed: {len(tasks) - len(remaining)} | remaining: {len(remaining)}")
         print(f"Progress state: {state_path}")
+        if remaining:
+            next_task = remaining[0]
+            print(f"Next run: {next_task.model} {next_task.dataset_path.name} seed={next_task.seed}")
         return 0
 
     write_progress(state_path, progress)

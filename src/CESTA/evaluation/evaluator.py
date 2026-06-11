@@ -5,6 +5,8 @@ Runs inference on a dataset and computes classification metrics.
 
 from __future__ import annotations
 
+from typing import Any
+
 import numpy as np
 import torch
 import torch.nn as nn
@@ -19,7 +21,7 @@ from CESTA.schema.fault import FaultType
 from CESTA.training.batch_utils import infer_num_classes, make_window_loader, prepare_batch
 from CESTA.training.objectives import decode_predictions, masked_loss, valid_outputs
 
-from .communication import aggregate_communication_stats
+from .communication import aggregate_communication_stats, normalize_communication_stats
 from .result import EvalResult
 
 
@@ -81,7 +83,7 @@ class Evaluator:
         all_preds: list[torch.Tensor] = []
         all_targets: list[torch.Tensor] = []
         all_probs: list[torch.Tensor] = []
-        communication_stats: list[dict[str, float]] = []
+        communication_stats: list[dict[str, Any]] = []
 
         for batch in loader:
             model_input, y_batch, batch_node_mask, batch_size = prepare_batch(batch, self.device)
@@ -90,7 +92,7 @@ class Evaluator:
             loss = masked_loss(criterion, logits, y_batch, batch_node_mask)
             stats = getattr(model, "last_communication_stats", None)
             if isinstance(stats, dict):
-                communication_stats.append({k: float(v) for k, v in stats.items()})
+                communication_stats.append(normalize_communication_stats(stats))
 
             total_loss += loss.item() * batch_size
             preds = decode_predictions(model, logits, batch_node_mask)

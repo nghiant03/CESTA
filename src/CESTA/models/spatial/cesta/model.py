@@ -307,9 +307,7 @@ class CESTAClassifier(CESTASequenceMixin, CESTACommunicationMixin, BaseModel):
             correction_context = (neighbor_context, possible_mask, neighbor_belief_context)
             self._last_communication_stats = self._dense_communication_stats(
                 possible_mask=possible_mask,
-                batch=batch,
-                seq_len=seq_len,
-                device=x.device,
+                edge_index=edge_index,
             )
             self._communication_loss = self._dense_communication_loss(possible_mask)
             self._communication_activity = self._receiver_request_activity(possible_mask, possible_mask)
@@ -330,6 +328,7 @@ class CESTAClassifier(CESTASequenceMixin, CESTACommunicationMixin, BaseModel):
             self._last_communication_stats = self._request_communication_stats(
                 request_mask=request_mask,
                 possible_mask=possible_mask,
+                edge_index=edge_index,
             )
             self._communication_loss = self._request_communication_loss(
                 request_mask=request_mask,
@@ -338,8 +337,9 @@ class CESTAClassifier(CESTASequenceMixin, CESTACommunicationMixin, BaseModel):
             self._communication_activity = self._receiver_request_activity(request_mask, possible_mask)
             self._gate_entropy = self._compute_gate_entropy(soft_gate_probs)
         else:
+            possible_mask = self._possible_message_mask(local_hidden, edge_index=edge_index, edge_mask=edge_mask)
             hidden = self.dropout(local_hidden)
-            self._last_communication_stats = self._zero_communication_stats()
+            self._last_communication_stats = self._zero_communication_stats(possible_mask=possible_mask, edge_index=edge_index)
             self._communication_loss = torch.zeros((), dtype=local_hidden.dtype, device=x.device)
             self._communication_activity = torch.zeros(batch, seq_len, self.num_nodes, dtype=local_hidden.dtype, device=x.device)
             self._gate_entropy = None

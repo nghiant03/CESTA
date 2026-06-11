@@ -6,6 +6,7 @@ to be added dynamically without modifying core training code.
 
 from __future__ import annotations
 
+import inspect
 from typing import Any
 
 from CESTA.models.base import BaseModel
@@ -106,8 +107,10 @@ def create_model(
     }
 
     model_kwargs.update(_extract_metadata_kwargs(metadata, usable_metadata))
+    constructor_params = inspect.signature(model_cls.__init__).parameters
+    accepted_kwargs = {key: value for key, value in model_kwargs.items() if key in constructor_params}
 
-    return model_cls(**model_kwargs)
+    return model_cls(**accepted_kwargs)
 
 
 def _extract_metadata_kwargs(
