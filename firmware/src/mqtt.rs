@@ -1,3 +1,6 @@
+#![allow(dead_code)]
+
+use embedded_svc::mqtt::client::EventPayload;
 use esp_idf_svc::mqtt::client::{EspMqttClient, MqttClientConfiguration};
 use log::info;
 
@@ -23,12 +26,23 @@ pub fn connect() -> EspMqttClient<'static> {
     let client = EspMqttClient::new_cb(
         &broker_url,
         &mqtt_config,
-        |event| {
-            log::debug!("[MQTT] Event: {:?}", event.payload());
+        |event| match event.payload() {
+            EventPayload::Connected(session_present) => {
+                info!("[MQTT] connected session_present={}", session_present);
+            }
+            EventPayload::Published(message_id) => {
+                info!("[MQTT] publish acknowledged message_id={}", message_id);
+            }
+            EventPayload::Error(error) => {
+                log::error!("[MQTT] event error: {:?}", error);
+            }
+            payload => {
+                log::debug!("[MQTT] Event: {:?}", payload);
+            }
         },
     )
     .expect("Failed to create MQTT client");
 
-    info!("[MQTT] connected");
+    info!("[MQTT] client created");
     client
 }

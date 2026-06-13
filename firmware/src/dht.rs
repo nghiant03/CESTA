@@ -1,7 +1,7 @@
 use esp_idf_hal::delay::Ets;
 use esp_idf_hal::gpio::{AnyIOPin, IOPin, InputOutput, PinDriver, Pull};
 
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug)]
 pub struct DhtReading {
     pub temperature: f32,
     pub humidity: f32,
@@ -14,21 +14,23 @@ pub struct Dht11Sensor<'a> {
 impl<'a> Dht11Sensor<'a> {
     pub fn new(pin: impl IOPin + 'a) -> Self {
         let mut driver =
-            PinDriver::input_output(pin.downgrade()).expect("DHT: Failed to init GPIO");
+            PinDriver::input_output_od(pin.downgrade()).expect("DHT: Failed to init GPIO");
         driver.set_pull(Pull::Up).expect("DHT: Failed to set pull-up");
         driver.set_high().expect("DHT: Failed to set high");
         Self { pin: driver }
     }
 
-    pub fn read(&mut self) -> Result<DhtReading, DhtError> {
+    pub fn read(&mut self, checksum_enabled: bool) -> Result<DhtReading, DhtError> {
         let mut data = [0u8; 5];
 
+        self.pin.set_high().map_err(|_| DhtError::Gpio)?;
+        Ets::delay_ms(2);
         self.pin.set_low().map_err(|_| DhtError::Gpio)?;
         Ets::delay_ms(20);
         self.pin.set_high().map_err(|_| DhtError::Gpio)?;
-        Ets::delay_us(30);
+        Ets::delay_us(40);
 
-        if let Err(e) = self.wait_low(100) {
+        if let Err(e) = self.wait_low(200) {
             log::warn!(
                 "DHT debug: Step 1 fail (sensor never pulled LOW). \
                  Pin is {}. Sensor disconnected or dead.",
@@ -36,19 +38,19 @@ impl<'a> Dht11Sensor<'a> {
             );
             return Err(e);
         }
-        if let Err(e) = self.wait_high(100) {
+        if let Err(e) = self.wait_high(200) {
             log::warn!("DHT debug: Step 2 fail (sensor never released HIGH).");
             return Err(e);
         }
-        if let Err(e) = self.wait_low(100) {
+        if let Err(e) = self.wait_low(200) {
             log::warn!("DHT debug: Step 3 fail (no first data-bit LOW).");
             return Err(e);
         }
 
         for byte in &mut data {
             for bit in (0..8).rev() {
-                self.wait_high(80)?;
-                let high_us = self.measure_high(100)?;
+                self.wait_high(120)?;
+                let high_us = self.measure_high(120)?;
                 if high_us > 40 {
                     *byte |= 1 << bit;
                 }
@@ -56,7 +58,7 @@ impl<'a> Dht11Sensor<'a> {
         }
 
         let sum = data[0] as u16 + data[1] as u16 + data[2] as u16 + data[3] as u16;
-        if (sum & 0xFF) != data[4] as u16 {
+        if checksum_enabled && (sum & 0xFF) != data[4] as u16 {
             return Err(DhtError::Checksum);
         }
 

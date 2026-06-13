@@ -202,12 +202,21 @@ firmware/
 ├── sdkconfig.defaults    # ESP-IDF Kconfig (WiFi, SNTP, MQTT)
 ├── .cargo/config.toml    # Target: xtensa-esp32s3-espidf
 └── src/
-    ├── main.rs           # Entry point: init → WiFi → NTP → MQTT loop
-    ├── config.rs         # WiFi SSID/password, MQTT broker, device ID, DHT pin
+    ├── main.rs           # Entry point: init → WiFi → NTP → sensor read/fault/MQTT loop
+    ├── config.rs         # WiFi/MQTT/device pins and selected firmware fault profile
     ├── wifi.rs           # BlockingWifi connection via esp-idf-svc
     ├── mqtt.rs           # EspMqttClient connection and publish
+    ├── fault.rs          # Firmware-level/hardware-assisted fault profiles
     └── dht.rs            # Bit-banged DHT11 protocol over GPIO
 ```
+
+### Firmware Fault Profiles
+
+`firmware/src/config.rs` selects the per-device firmware profile with `FAULT_CONFIG`. Only `FAULT_NORMAL` and `FAULT_SPIKE` are currently implemented. The normal sensor path reads `DHT_PIN`; SPIKE reads a separate `SPIKE_DHT_PIN` and the main loop logs both normal and spike paths. SPIKE should be injected in hardware by using a MOSFET or open-drain transistor to briefly pull the spike sensor DATA line toward GND; firmware only reads that disturbed DATA path and uses `bypass_checksum=true` so corrupted frames are still emitted for diagnosis experiments.
+
+### Firmware SNTP
+
+`firmware/src/main.rs` builds an explicit `SntpConf` from `config::NTP_SERVER`; do not use `EspSntp::new_default()` when debugging a configured timestamp server because it ignores `config::NTP_SERVER` and uses the crate's pool defaults. The sync wait is configured by `NTP_SYNC_TIMEOUT_SECS` / `NTP_SYNC_POLL_MS`, and the boot log prints `FIRMWARE_BUILD_TAG` plus the active NTP timing values to verify the flashed binary.
 
 ### MQTT Payload
 

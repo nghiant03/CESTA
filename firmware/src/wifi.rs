@@ -41,7 +41,14 @@ pub fn connect() -> BlockingWifi<EspWifi<'static>> {
     wifi.wait_netif_up().unwrap();
 
     let ip_info = wifi.wifi().sta_netif().get_ip_info().unwrap();
-    info!("[Wifi] Connected, IP {}", ip_info.ip);
+    info!(
+        "[Wifi] Connected, IP {}, gateway {}, netmask {}, DNS {:?}, secondary DNS {:?}",
+        ip_info.ip,
+        ip_info.subnet.gateway,
+        ip_info.subnet.mask,
+        ip_info.dns,
+        ip_info.secondary_dns
+    );
 
     wifi
 }
