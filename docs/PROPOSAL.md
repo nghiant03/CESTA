@@ -105,25 +105,26 @@ Out of scope for the first paper iteration:
 
 ## Current evidence
 
-Current results are extracted into `docs/RESULT.md`. The short version is:
+Provisional evidence is recorded as scoped memos under `docs/results/`:
 
-- dense CESTA + logit correction + CRF reaches the strongest single-seed `Intel_fault15` dense result so far;
-- request-only Gumbel has Pareto-useful bit-count reductions in the same split;
-- evidence is still single-seed and transmitted-bit based, so it is not yet a paper-level energy claim;
-- dense CRF and request-gated variants need multi-seed confirmation before adding compression, RL, or broad claims.
+- `docs/results/intel-fault15-development.md` preserves the historical single-seed design experiments;
+- `docs/results/selective-benchmark-snapshot.md` aggregates three seeds across four fault ratios for selected request-gated variants;
+- the strongest selective variants clear the minimum average macro-F1 uplift by about `+0.012`, but remain below the preferred `+0.03` to `+0.04` target;
+- the current benchmark is incomplete because it lacks seed-replicated dense CESTA, budget-matched controls, and consolidated TX+RX energy reporting.
 
 ## Main risks
 
 1. Temporal baselines are already strong, so the preferred +0.03 to +0.04 macro-F1 target may be difficult.
-2. Current dense gains are enough for the minimum `Intel_fault15` target but not yet a strong Q1-level margin.
-3. Learned gating evidence is single-seed and must be replicated.
-4. ST-GCN is too weak to be the only spatial comparator.
-5. Communication gates may collapse all-on or all-off.
-6. Energy claims are invalid until TX+RX accounting is implemented.
-7. CRF smoothing helps persistent faults but can oversmooth short SPIKE events.
-8. Naive boundary supervision hurt the current dense model.
-9. HiFiNet may be required or must be clearly bounded as unavailable/inapplicable.
+2. The multi-seed selective uplift clears the minimum target but is not yet a strong Q1-level margin.
+3. Dense CESTA has not yet been replicated across the full benchmark, so Pareto superiority is unresolved.
+4. Learned gating has not yet been tested against budget-matched controls.
+5. ST-GCN is too weak to be the only spatial comparator.
+6. Communication gates may collapse all-on or all-off.
+7. Energy claims require consolidated TX+RX reporting from serialized run artifacts.
+8. CRF smoothing helps persistent faults but can oversmooth short SPIKE events.
+9. Naive boundary supervision hurt the current dense model.
+10. HiFiNet may be required or must be clearly bounded as unavailable/inapplicable.
 
-## Implementation plan
+## Research tracker
 
-Remaining implementation and experiment milestones live in `PLAN.md`.
+Unresolved implementation, experiment, and paper-readiness work lives in `PLAN.md`.

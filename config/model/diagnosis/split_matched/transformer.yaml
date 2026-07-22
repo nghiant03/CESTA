@@ -1,0 +1,34 @@
+train:
+  model: transformer
+  epochs: 100
+  batch_size: 16
+  learning_rate: 0.0008
+  use_focal_loss: true
+  focal_gamma: 0.7
+  focal_alpha: null
+  oversample: false
+  oversample_ratio: 1.0
+  checkpoint_monitor: val_macro_f1
+  early_stopping_monitor: val_macro_f1
+  features: ["temp"]
+  seed: 42
+
+data:
+  window:
+    window_size: 60
+    train_stride: 10
+    test_stride: 60
+  split:
+    strategy: connectivity-chronological
+    train_ratio: 0.7
+    val_ratio: 0.15
+    test_ratio: 0.15
+    tolerance: 0.05
+
+model_kwargs:
+  d_model: 32
+  num_layers: 3
+  n_heads: 8
+  d_ff: 256
+  max_len: 60
+  dropout: 0.02

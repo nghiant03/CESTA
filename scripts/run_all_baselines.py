@@ -14,6 +14,10 @@ from typing import Any
 
 import yaml
 
+from CESTA.schema import TrainConfig
+from CESTA.schema.config import load_config_file
+from CESTA.utils import sha256_file
+
 DEFAULT_CONFIGS = (
     Path("config/model/cnn1d.yaml"),
     Path("config/model/lstm.yaml"),
@@ -122,6 +126,81 @@ def build_tasks(configs: list[Path], datasets: list[Path], seeds: list[int]) -> 
     ]
 
 
+def discover_completed_tasks(tasks: list[BaselineTask], runs_dir: Path) -> dict[str, dict[str, Any]]:
+    expected = {_task_signature(task): task for task in tasks}
+    completed: dict[str, dict[str, Any]] = {}
+    for manifest_path in sorted(runs_dir.glob("*/*/manifest.json")):
+        run_dir = manifest_path.parent
+        if not _has_complete_run_artifacts(run_dir):
+            continue
+        try:
+            manifest = json.loads(manifest_path.read_text())
+        except (OSError, json.JSONDecodeError):
+            continue
+        signature = _manifest_signature(manifest)
+        if signature is None:
+            continue
+        task = expected.get(signature)
+        if task is None or task.key in completed:
+            continue
+        completed[task.key] = task.as_record() | {
+            "completed_at": manifest.get("timing", {}).get("ended_at"),
+            "run_id": manifest.get("run_id"),
+            "run_path": str(run_dir),
+            "source": "manifest",
+        }
+    return completed
+
+
+def _task_signature(task: BaselineTask) -> str:
+    raw_config = copy.deepcopy(load_config_file(task.config_path))
+    train_section = raw_config.get("train")
+    if isinstance(train_section, dict):
+        train_section["seed"] = task.seed
+    else:
+        raw_config["seed"] = task.seed
+    train_config = TrainConfig.model_validate(raw_config).model_dump(mode="json")
+    dataset = {
+        "data_sha256": sha256_file(task.dataset_path / "dataset.csv"),
+        "meta_sha256": sha256_file(task.dataset_path / "dataset_meta.json"),
+    }
+    return json.dumps(
+        {"model": task.model, "seed": task.seed, "train_config": train_config, "dataset": dataset},
+        sort_keys=True,
+    )
+
+
+def _manifest_signature(manifest: object) -> str | None:
+    if not isinstance(manifest, dict):
+        return None
+    dataset = manifest.get("dataset")
+    if not isinstance(dataset, dict):
+        return None
+    model = manifest.get("model")
+    seed = manifest.get("seed")
+    train_config = manifest.get("train_config")
+    data_sha256 = dataset.get("data_sha256")
+    meta_sha256 = dataset.get("meta_sha256")
+    if not isinstance(model, str) or not isinstance(seed, int) or not isinstance(train_config, dict):
+        return None
+    if not isinstance(data_sha256, str) or not isinstance(meta_sha256, str):
+        return None
+    return json.dumps(
+        {
+            "model": model,
+            "seed": seed,
+            "train_config": train_config,
+            "dataset": {"data_sha256": data_sha256, "meta_sha256": meta_sha256},
+        },
+        sort_keys=True,
+    )
+
+
+def _has_complete_run_artifacts(run_dir: Path) -> bool:
+    required = ("manifest.json", "config.json", "weight.pt", "eval_metrics.json", "predictions.npz")
+    return all((run_dir / name).is_file() for name in required)
+
+
 def initial_progress(total: int) -> dict[str, Any]:
     now = utc_now()
     return {
@@ -212,6 +291,7 @@ def main() -> int:
     temp_dir = runs_dir / "baseline_sweep_configs"
     tasks = build_tasks(args.configs, args.datasets, args.seeds)
     progress = load_progress(state_path, len(tasks), args.restart)
+    progress["completed"] = {} if args.restart else discover_completed_tasks(tasks, runs_dir)
     completed = progress["completed"]
     remaining = [task for task in tasks if task.key not in completed]
 

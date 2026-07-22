@@ -1,0 +1,35 @@
+train:
+  model: autoformer
+  epochs: 100
+  batch_size: 16
+  learning_rate: 0.0008
+  use_focal_loss: true
+  focal_gamma: 1.8
+  focal_alpha: null
+  oversample: true
+  oversample_ratio: 0.67
+  checkpoint_monitor: val_macro_f1
+  early_stopping_monitor: val_macro_f1
+  features: ["temp"]
+  seed: 42
+
+data:
+  window:
+    window_size: 60
+    train_stride: 10
+    test_stride: 60
+  split:
+    strategy: connectivity-chronological
+    train_ratio: 0.7
+    val_ratio: 0.15
+    test_ratio: 0.15
+    tolerance: 0.05
+
+model_kwargs:
+  d_model: 64
+  num_layers: 4
+  n_heads: 2
+  d_ff: 128
+  max_len: 60
+  dropout: 0.005
+  moving_average: 7

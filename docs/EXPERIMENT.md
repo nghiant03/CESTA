@@ -13,10 +13,10 @@ CESTA will improve average macro-F1 over the best temporal-only model per fault 
 Use the harder canonical Intel graph datasets:
 
 ```text
-data/canon/Intel_fault05
-data/canon/Intel_fault10
-data/canon/Intel_fault15
-data/canon/Intel_fault20
+data/datasets/Intel_fault05
+data/datasets/Intel_fault10
+data/datasets/Intel_fault15
+data/datasets/Intel_fault20
 ```
 
 Use temp-only input for comparability:
@@ -31,7 +31,7 @@ features: ["temp"]
 active_edge[t,e] = link_success[t,e] & node_observed[t,sender(e)] & node_observed[t,receiver(e)]
 ```
 
-Missing node labels are stored as `-1` and excluded by masked loss/metrics. Complete-case timestamp filtering is not viable because no timestamp contains all 55 Intel nodes. The decisive development dataset is `data/canon/Intel_fault15`.
+Missing node labels are stored as `-1` and excluded by masked loss/metrics. Complete-case timestamp filtering is not viable because no timestamp contains all 55 Intel nodes. The decisive development dataset is `data/datasets/Intel_fault15`.
 
 ## Temporal targets
 
@@ -44,20 +44,21 @@ Missing node labels are stored as `-1` and excluded by masked loss/metrics. Comp
 
 Preferred target: `+0.03` to `+0.04` average macro-F1 over the best temporal baselines.
 
-## Current results
+## Evidence records
 
-Current dense, request-gated, communication-conditioned, VOI, CRF, and boundary-diagnosis results are kept in `docs/RESULT.md`.
+Completed experiment batches are recorded as scoped memos under `docs/results/`, not as a final comparison:
+
+- `docs/results/intel-fault15-development.md` records historical single-seed dense, request-gated, communication-conditioned, VOI, CRF, and boundary experiments.
+- `docs/results/selective-benchmark-snapshot.md` records the current three-seed selective benchmark across four fault ratios.
 
 Current interpretation:
 
-1. Dense CESTA can exceed the same-split temporal baseline under `features: ["temp"]`.
-2. Logit correction remains useful for both dense and request-gated paths.
-3. Boundary supervision alone is not reliable and hurt DRIFT in the current experiment.
-4. CRF decoding is the best dense refinement so far, but the CRF weight needs seed-robust selection.
-5. Request-only Gumbel is Pareto-useful by transmitted-bit counts, but this is not yet a TX+RX energy claim.
-6. Communication-conditioned correction is promising at penalty `1e-3`.
-7. The tested VOI proxy is not reliable alone, though it may help in low-bit combinations.
-8. The next decisive experiment is multi-seed confirmation plus budget-matched controls.
+1. Dense CESTA can exceed the same-split temporal baseline under `features: ["temp"]`, but the dense comparator still needs full seed replication.
+2. Selected request-only variants improve average macro-F1 over the best temporal models by about `+0.012` across the current multi-seed benchmark.
+3. The uplift clears the minimum `+0.01` target but remains below the preferred `+0.03` to `+0.04` target.
+4. Transmitted-bit reductions do not establish a TX+RX energy claim.
+5. Learned-gating superiority remains untested until budget-matched controls are complete.
+6. Compression and RL remain deferred until the request-only comparison is complete.
 
 ## Baselines and controls
 
@@ -75,6 +76,23 @@ Current interpretation:
 4. Static top-k graph communication using strongest connectivity edges.
 5. Random communication at matched average communication budget.
 6. Rule-based controllers at matched budget: entropy threshold, prediction-margin threshold, local-change threshold, and combined uncertainty/change trigger.
+
+### Reporting and comparator locking
+
+The full reporting matrix includes every variant with all expected dataset and seed cells, exact resolved configuration identity, complete artifacts, finite classification metrics, and recorded dataset hashes. Inclusion is not evidence of direct comparability. Every table and machine-readable record must identify the comparison cohort defined by feature set, windowing, split strategy and ratios, dataset hashes, and test support.
+
+The existing temporal and ST-GCN baseline sweep uses an `80/10/10` split, while the decisive CESTA matrix uses a connectivity-aligned `70/15/15` split. Those legacy baselines remain descriptive secondary evidence but are not eligible for paired accuracy claims against the decisive CESTA runs. The primary temporal comparator must be retrained on the decisive split before that claim is evaluated.
+
+Lock the primary temporal comparator without reading test metrics:
+
+1. Require complete coverage on all four datasets and all three seeds under the decisive split.
+2. Rank eligible temporal model families by mean checkpoint validation macro-F1 across all 12 cells.
+3. Lock the highest-ranked family; break an exact tie by lower validation macro-F1 standard deviation, then lower parameter count, then lexical model name.
+4. Evaluate the locked family on test data and retain all other eligible families as secondary comparisons.
+
+The primary accuracy subset is the locked temporal comparator versus predefined CESTA variants on the same split and test support. The communication-energy subset is dense versus selective CESTA with identical graph, payload, radio constants, datasets, and seeds. Budget-matched controllers form a later subset and must be tuned on validation data only.
+
+Use dataset-and-seed matched differences for primary comparisons. Report the mean paired difference, sample standard deviation, all 12 paired differences, and a deterministic two-sided 95% paired bootstrap interval with 10,000 resamples and bootstrap seed `20260723`. With only three seeds per dataset, intervals are descriptive uncertainty estimates rather than strong significance evidence.
 
 ## Metrics
 
@@ -146,7 +164,7 @@ Serialize units, constants, dynamic-link metadata, distance source, TX share, RX
 8. **RL prototype**: request-only first, then compression only if request-only RL is reproducible.
 9. **Full benchmark**: selected variants across all four Intel fault ratios.
 
-Detailed implementation milestones live in `PLAN.md`.
+Unresolved implementation, experiment, and paper-readiness work is tracked in `PLAN.md`.
 
 ## Required ablations
 

@@ -14,7 +14,7 @@ The main experimental question is:
 
 > Can selective receiver-side communication exceed strong temporal-only macro-F1 while reducing communication energy relative to dense spatial message passing?
 
-See [`docs/PROPOSAL.md`](docs/PROPOSAL.md), [`docs/EXPERIMENT.md`](docs/EXPERIMENT.md), [`docs/RESULT.md`](docs/RESULT.md), and [`PLAN.md`](PLAN.md) for the research motivation, protocol, current results, and remaining milestones.
+See [`docs/PROPOSAL.md`](docs/PROPOSAL.md) for research intent, [`docs/EXPERIMENT.md`](docs/EXPERIMENT.md) for the protocol, [`docs/results/`](docs/results/) for scoped evidence memos, and [`PLAN.md`](PLAN.md) for unresolved work.
 
 ## Highlights
 
@@ -97,7 +97,7 @@ Training is config-file-first. Model, optimizer, data-window, split, loss, and c
 
 ```bash
 uv run cesta train config/model/lstm.yaml data/canon/intel_lab
-uv run cesta train config/model/diagnosis/cesta_diag_70_15_15_dense.yaml data/canon/Intel_fault15
+uv run cesta train config/model/diagnosis/cesta_diag_70_15_15_dense.yaml data/datasets/Intel_fault15
 ```
 
 Large command surfaces use YAML or JSON config files; smaller utility commands keep direct CLI options. This keeps experiment settings reproducible and avoids hidden command-line state.
@@ -151,7 +151,7 @@ src/CESTA/
 └── seed.py            # Reproducibility helper
 
 config/                # Data transform, model, and diagnosis YAML configs
-docs/                  # Proposal, experiment plan, and research notes
+docs/                  # Proposal, protocol, experiment plans, and result memos
 firmware/              # ESP32-S3 Rust firmware for optional data collection
 notebooks/             # Analysis notebooks
 runs/                  # Generated experiment artifacts
@@ -197,4 +197,4 @@ The optional firmware stack targets ESP32-S3 devices collecting DHT11 readings a
 
 ## Repository status
 
-This is an active research repository. APIs and experiment settings may change as hypotheses are tested. Treat `docs/PROPOSAL.md`, `docs/EXPERIMENT.md`, `docs/RESULT.md`, `PLAN.md`, and checked-in configs as the canonical references for current research intent and experimental protocol.
+This is an active research repository. APIs and experiment settings may change as hypotheses are tested. Treat `docs/PROPOSAL.md` as research intent, `docs/EXPERIMENT.md` as the shared protocol, `docs/results/` as provisional evidence, `PLAN.md` as the unresolved-work tracker, and checked-in configs as executable experiment definitions.

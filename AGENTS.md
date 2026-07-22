@@ -38,7 +38,7 @@ src/CESTA/
 │   ├── temporal/      # Temporal models: CNN1D, LSTM, GRU, Transformer, Autoformer, Informer, PatchTST, ModernTCN
 │   └── spatial/       # Spatial models: ST-GCN, CESTA
 ├── training/          # Trainer, focal loss, oversampling, and callbacks
-├── evaluation/        # Evaluator, evaluation result persistence, and communication metrics
+├── evaluation/        # Evaluator, result persistence, communication metrics, and benchmark auditing
 ├── optimization/      # Optuna search spaces and Optimizer for HPO
 ├── utils.py           # Shared runtime helpers (git/env collectors, run id, sha256)
 ├── seed.py            # seed_everything() utility for reproducibility
@@ -52,10 +52,11 @@ notebooks/             # Jupyter notebooks for analysis
 
 ## Research Documentation
 
-- `docs/PROPOSAL.md` - Condensed research proposal for CESTA, including motivation, hypotheses, design constraints, baselines, scope, and risks.
-- `docs/EXPERIMENT.md` - Condensed experiment protocol for datasets, metrics, baselines, staged experiments, ablations, and reproducibility notes.
-- `docs/RESULT.md` - Current single-seed diagnosis results, interpretations, validity cautions, and next empirical decision.
-- `PLAN.md` - Remaining implementation and experiment milestones replacing the old task breakdown.
+- `docs/PROPOSAL.md` - Stable research intent: motivation, hypotheses, success criteria, design constraints, scope, and risks.
+- `docs/EXPERIMENT.md` - Shared experiment protocol: datasets, metrics, baselines, selection rules, ablations, and reproducibility requirements.
+- `docs/experiments/` - Focused plans for experiment batches that need setup details beyond the shared protocol.
+- `docs/results/` - Scoped provisional result memos. Name files by dataset, experiment, or snapshot; do not call unfinished evidence a final comparison.
+- `PLAN.md` - Unresolved research work, priorities, completion criteria, and hard boundaries. Do not duplicate result tables here.
 
 
 ## Schema Module (`schema/`)
@@ -188,6 +189,8 @@ net = create_model(config.model, input_size=prepared.input_size,
 - `EvalResult` (`result.py`) - Dataclass holding loss, accuracy, macro_f1, per-class ClassMetrics, y_true, y_pred, y_prob, and optional communication metrics. Has `save(path)` to persist `eval_metrics.json`, `predictions.npz`, and `communication_metrics.json` when available. Has `load(path)` class method.
 - `communication.py` - Aggregates per-batch communication stats into split-level counts, preserves per-edge requested/possible counts, and attaches dense-reference TX+RX energy metrics when graph distances are available.
 - `energy.py` - First-order radio-energy accounting utility outside the model. Uses `GraphMetadata.edge_distance_m`, counts TX and RX energy per active sender→receiver message, supports free-space and multipath regimes with `d0 = sqrt(E_fs / E_mp)`, and serializes constants, units, distance source, TX/RX shares, totals, and dense-vs-selective reductions.
+- `benchmark.py` - Matches manifests to a checked-in expected matrix without using test performance, validates metric and energy identities, rejects missing, duplicate, or incomparable cells, and emits deterministic run-level records. Run `uv run python scripts/audit_decisive_comparison.py --spec config/benchmark/decisive-comparison.yaml --runs-root runs --output runs/decisive-comparison-audit --allow-incomplete`; omit `--allow-incomplete` when the matrix should be complete.
+- `benchmark_summary.py` - Aggregates normalized classification records and computes explicit dataset-and-seed paired differences with deterministic bootstrap intervals. It never chooses a comparator from test scores. Run `uv run python scripts/summarize_decisive_comparison.py --runs-csv runs/decisive-comparison-audit/runs.csv --output runs/decisive-comparison-summary --comparison <variant> <locked-reference>`.
 
 ## Firmware Module (`firmware/`)
 
@@ -248,7 +251,7 @@ ESP32 devices connect via WiFi to an on-prem MQTT broker (Mosquitto). Recommende
 
 1. **Data Transform**: `uv run cesta transform intel_lab data/raw/Intel/data.txt data/datasets/intel_lab --config config/data/intel_fault15.yaml`
 2. **Training**: `uv run cesta train config/model/lstm.yaml data/canon/intel_lab`
-4. **Baseline Sweep**: `uv run python scripts/run_all_baselines.py` runs all default baseline configs on `data/datasets/Intel_fault05`, `Intel_fault10`, `Intel_fault15`, and `Intel_fault20` with seeds `12`, `42`, and `1242`. It writes resumable progress under `runs/baseline_sweep_state.json` and `runs/baseline_sweep_events.jsonl`, then deletes those progress logs after all runs finish unless `--keep-progress-log` is set. Use `--dry-run` to inspect planned/remaining runs.
+4. **Baseline Sweep**: `uv run python scripts/run_all_baselines.py` runs all default baseline configs on `data/datasets/Intel_fault05`, `Intel_fault10`, `Intel_fault15`, and `Intel_fault20` with seeds `12`, `42`, and `1242`. It reconciles completed tasks from run manifests using the resolved training config, seed, and dataset hashes, so deleted progress logs do not cause duplicate training. It writes in-progress state under `runs/baseline_sweep_state.json` and `runs/baseline_sweep_events.jsonl`, then deletes those logs after all runs finish unless `--keep-progress-log` is set. Use `--dry-run` to inspect planned/remaining runs. Configs under `config/model/diagnosis/split_matched/` preserve each temporal architecture and training settings while using CESTA's `70/15/15 connectivity-chronological` split and validation-macro-F1 checkpointing; use these for direct decisive-comparison accuracy claims, not the legacy `80/10/10` baseline results.
 3. **Hyperparameter Search** (optional): `uv run cesta optimize --data data/canon/intel_lab --model lstm --n-trials 20 --epochs 10`
 4. **Evaluation**: `uv run cesta evaluate --model runs/lstm/<run_id> --data data/canon/intel_lab`
 

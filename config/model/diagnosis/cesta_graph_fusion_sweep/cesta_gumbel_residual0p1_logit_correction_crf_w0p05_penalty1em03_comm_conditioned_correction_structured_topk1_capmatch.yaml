@@ -1,0 +1,53 @@
+train:
+  model: cesta
+  epochs: 100
+  batch_size: 16
+  learning_rate: 0.001
+  use_focal_loss: true
+  focal_gamma: 2.0
+  focal_alpha: null
+  oversample: false
+  oversample_ratio: 1.0
+  communication_penalty_weight: 0.001
+  communication_penalty_mode: budget_hinge
+  target_request_ratio: 0.3
+  gate_entropy_weight: 0.001
+  crf_loss_weight: 0.05
+  gumbel_tau_start: 1.0
+  gumbel_tau_end: 0.5
+  gumbel_tau_anneal_epochs: 50
+  checkpoint_monitor: val_macro_f1
+  early_stopping_monitor: val_macro_f1
+  features: ["temp"]
+  seed: 42
+
+data:
+  window:
+    window_size: 60
+    train_stride: 10
+    test_stride: 60
+  split:
+    strategy: connectivity-chronological
+    train_ratio: 0.7
+    val_ratio: 0.15
+    test_ratio: 0.15
+    tolerance: 0.05
+
+model_kwargs:
+  hidden_size: 128
+  num_layers: 2
+  dropout: 0.2
+  communication_mode: gumbel_request
+  fusion_hidden_size: 64
+  precision_bits: 32
+  gumbel_temperature: 1.0
+  gate_hidden_size: 32
+  num_attention_heads: 1
+  bidirectional: true
+  graph_residual_init: 0.1
+  use_logit_correction: true
+  use_communication_conditioned_correction: true
+  structured_request_topk: 1
+  correction_hidden_size: 64
+  correction_init: 0.1
+  use_crf: true

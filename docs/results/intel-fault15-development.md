@@ -1,4 +1,6 @@
-# CESTA current results
+# Result memo: Intel fault15 development experiments
+
+**Status:** Historical single-seed development evidence. This memo records model-design decisions and is not a current benchmark or paper result table.
 
 ## Development setting
 
