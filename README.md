@@ -1,165 +1,120 @@
 # CESTA
 
-**Communication-Efficient Spatial-Temporal Aggregation for sensor fault diagnosis.**
+Communication-Efficient Spatial-Temporal Aggregation for sensor-network fault diagnosis.
 
-CESTA is a research codebase for studying communication-aware fault diagnosis in sensor networks. It provides a reproducible pipeline for raw-data transformation, temporal and spatial-temporal model training, communication-cost evaluation, and run artifact persistence.
+CESTA provides reproducible raw-data transformation, synthetic fault injection, temporal and graph model training, communication-energy evaluation, and run artifact persistence. The research asks whether receiver-side selective communication can outperform strong temporal models while using less TX+RX energy than dense spatial message passing. See [`docs/RESEARCH.md`](docs/RESEARCH.md) for the consolidated aim, protocol, evidence, and work plan.
 
-The current research focus is a receiver-side learned request mechanism: each sensor node first reasons from local temporal evidence, then selectively requests neighbor information over existing graph edges when communication is expected to improve diagnosis.
+## Setup
 
-## Research aim
-
-Dense spatial-temporal models can improve diagnosis by sharing neighbor context, but they often assume all graph communication is always available and free. CESTA targets the harder edge-oriented setting where radio communication is costly, dynamic, and should be justified by diagnostic value.
-
-The main experimental question is:
-
-> Can selective receiver-side communication exceed strong temporal-only macro-F1 while reducing communication energy relative to dense spatial message passing?
-
-See [`docs/PROPOSAL.md`](docs/PROPOSAL.md) for research intent, [`docs/EXPERIMENT.md`](docs/EXPERIMENT.md) for the protocol, [`docs/results/`](docs/results/) for scoped evidence memos, and [`PLAN.md`](PLAN.md) for unresolved work.
-
-## Highlights
-
-- Markov-chain injection of realistic sensor faults: `SPIKE`, `DRIFT`, and `STUCK`.
-- Temporal baselines: CNN1D, LSTM, GRU, Transformer, Autoformer, Informer, PatchTST, and ModernTCN.
-- Spatial-temporal baselines: ST-GCN and dense CESTA over canonical graph-aware datasets.
-- Communication-aware CESTA with receiver-side Gumbel request gating, optional neighbor belief messages, communication-conditioned correction, VOI-style objectives, and CRF sequence decoding.
-- Canonical dataset transformation from raw readings, fault injection, Intel connectivity, node positions, dynamic link masks, and edge distances.
-- Reproducible run artifacts: manifests, configs, checkpoints, histories, evaluation metrics, predictions, and communication metrics.
-- Optuna hyperparameter optimization for reproducible model selection.
-- Optional ESP32-S3 Rust firmware for lab sensor collection over MQTT.
-
-## Installation
-
-### Requirements
-
-- Python 3.11 or newer
-- [`uv`](https://docs.astral.sh/uv/) for environment management
-- CUDA-compatible PyTorch is configured through `pyproject.toml` via the PyTorch CUDA 12.4 index
-
-### Setup
+Requirements: Python 3.11+, [`uv`](https://docs.astral.sh/uv/), and a PyTorch-compatible environment.
 
 ```bash
 git clone https://github.com/Sinner/CESTA.git
 cd CESTA
 uv sync
-```
-
-Verify the CLI:
-
-```bash
 uv run cesta --help
-uv run cesta list models
-uv run cesta list datasets
 ```
 
-## Quick start
-
-The standard workflow is transform, training, and evaluation.
+## Workflow
 
 ```bash
-# 1. Transform raw Intel sensor data into a canonical dataset
-uv run cesta transform intel_lab data/raw/Intel/data.txt data/canon/intel_lab --config config/data/intel_fault15.yaml
+# Transform raw Intel data into a canonical dataset
+uv run cesta transform intel_lab data/raw/Intel/data.txt data/canon/intel_lab \
+  --config config/data/intel_fault15.yaml
 
-# 2. Train a temporal baseline
+# Train temporal and communication-aware models
 uv run cesta train config/model/gru.yaml data/canon/intel_lab
-
-# 3. Train CESTA
 uv run cesta train config/model/cesta.yaml data/canon/intel_lab
 
-# 4. Evaluate a run
+# Evaluate a run
 uv run cesta evaluate --model runs/cesta/<run_id> --data data/canon/intel_lab
 ```
 
-Diagnosis-focused configurations live under `config/model/diagnosis/` and encode the current higher-end research settings for dense, request-gated, residual, and capacity-matched CESTA variants.
+Training is config-file-first. Diagnosis and benchmark configurations live under `config/model/diagnosis/`; use `uv run cesta <command> --help` for all command options.
 
-## Data pipeline
+## Capabilities
 
-CESTA separates the data lifecycle into raw sources and canonical datasets.
+- Markov injection of `SPIKE`, `DRIFT`, and `STUCK` sensor faults.
+- Temporal models: CNN1D, LSTM, GRU, Transformer, Autoformer, Informer, PatchTST, and ModernTCN.
+- Spatial models: dynamic ST-GCN and CESTA.
+- CESTA modes: no communication, dense communication, and receiver-side Gumbel request gating.
+- Canonical graph datasets with node masks, dynamic edge masks, node positions, and edge distances.
+- Classification, communication, and theoretical TX+RX radio-energy metrics.
+- Reproducible manifests, configs, checkpoints, histories, predictions, and Optuna searches.
+- Optional ESP32-S3 DHT11/MQTT firmware under `firmware/`.
 
-1. Raw loaders normalize source data into a common sensor-time table.
-2. `cesta transform` adds synthetic fault labels, graph topology, dynamic communication masks, node positions, and edge distances.
-3. Window preparation produces chronological train/validation/test splits for temporal or graph-aligned training.
+## Artifacts
 
-Graph models receive per-window tensors with node masks and edge masks, so missing node readings and unavailable communication links can be handled without requiring complete-case timestamps.
-
-## Models
-
-| Family | Models | Notes |
-|---|---|---|
-| Temporal | `cnn1d`, `lstm`, `gru`, `transformer`, `autoformer`, `informer`, `patchtst`, `modern_tcn` | Strong local-only baselines for fault diagnosis. |
-| Spatial-temporal | `stgcn`, `cesta` | Require graph metadata serialized by `cesta transform`. |
-| Communication-aware | `cesta` | Supports dense, no-communication, and receiver-side Gumbel request modes. |
-
-CESTA can be configured with graph residual fusion, learned request gates, communication penalties, neighbor belief features, boundary supervision, communication-conditioned correction, structured top-k requests, VOI-style gate loss, and CRF decoding.
-
-## Configuration
-
-Training is config-file-first. Model, optimizer, data-window, split, loss, and communication settings are stored in YAML and validated by Pydantic.
-
-```bash
-uv run cesta train config/model/lstm.yaml data/canon/intel_lab
-uv run cesta train config/model/diagnosis/cesta_diag_70_15_15_dense.yaml data/datasets/Intel_fault15
-```
-
-Large command surfaces use YAML or JSON config files; smaller utility commands keep direct CLI options. This keeps experiment settings reproducible and avoids hidden command-line state.
-
-## Run artifacts
-
-Each training invocation creates a new run directory and never overwrites previous runs.
+Every training invocation creates a new directory:
 
 ```text
-runs/<model>/<utc_ts>_<model>_seed<seed>_<shortsha>/
+runs/<model>/<run_id>/
 ├── weight.pt
 ├── config.json
 ├── history.jsonl
 ├── manifest.json
 ├── eval_metrics.json
-└── predictions.npz
+├── predictions.npz
+└── communication_metrics.json  # communication-aware models
 ```
 
-Communication-aware models also write communication metrics during evaluation when available.
+Audit and summarize the decisive comparison with:
 
-## CLI overview
+```bash
+uv run python scripts/audit_decisive_comparison.py \
+  --spec config/benchmark/decisive-comparison.yaml \
+  --runs-root runs \
+  --output runs/decisive-comparison-audit
 
-```text
-cesta
-├── transform           # Transform raw data into a canonical dataset
-├── train               # Train from a YAML/JSON config
-├── evaluate            # Evaluate a trained run
-├── optimize            # Run Optuna hyperparameter search
-│   └── show            # Display study results
-└── list                # List datasets, models, or metrics
+uv run python scripts/summarize_decisive_comparison.py \
+  --runs-csv runs/decisive-comparison-audit/runs.csv \
+  --output runs/decisive-comparison-summary \
+  --comparison <variant> <locked-reference>
 ```
 
-Run `uv run cesta <command> --help` for command-specific options.
-
-## Project structure
+## Layout
 
 ```text
 src/CESTA/
-├── schema/            # Pydantic configs and manifest schemas
-├── batch.py           # Runtime batch contracts
-├── artifacts.py       # Run artifact and checkpoint helpers
-├── workflows/         # Reusable train/evaluate orchestration
-├── cli/               # Typer CLI
-├── injection/         # Markov generator and fault injectors
-├── datasets/          # Raw loaders and canonical dataset artifacts
-├── models/            # Temporal, spatial, and CESTA model definitions
-├── training/          # Trainer, losses, callbacks, objectives
-├── evaluation/        # Metrics, evaluator, communication reporting
-├── optimization/      # Optuna search spaces and optimizer
-├── utils.py           # Runtime helpers
-└── seed.py            # Reproducibility helper
+├── schema/          # Config and manifest schemas
+├── cli/             # Typer commands
+├── workflows/       # Train/evaluate orchestration
+├── injection/       # Fault generation and injection
+├── datasets/        # Raw loaders and canonical artifacts
+├── models/          # Temporal and spatial models
+├── training/        # Trainer, losses, objectives, callbacks
+├── evaluation/      # Metrics, energy, audit, and summaries
+└── optimization/    # Optuna search
 
-config/                # Data transform, model, and diagnosis YAML configs
-docs/                  # Proposal, protocol, experiment plans, and result memos
-firmware/              # ESP32-S3 Rust firmware for optional data collection
-notebooks/             # Analysis notebooks
-runs/                  # Generated experiment artifacts
+config/              # Data, model, diagnosis, and benchmark configs
+docs/RESEARCH.md     # Research aim, protocol, evidence, and work plan
+firmware/             # ESP32-S3 firmware and deployment notes
+notebooks/            # Analysis notebooks
+runs/                 # Generated experiment artifacts
 ```
 
-## Development
+## Firmware
 
-Use the project tools through `uv`.
+The optional ESP32-S3 firmware reads DHT11 sensors, synchronizes time through the configured SNTP server, and publishes readings every 30 seconds to `cesta/readings/<device_id>`. Install `espup`, `espflash`, `ldproxy`, and ESP-IDF host dependencies, then configure WiFi, MQTT, device, pins, NTP timing, build tag, and `FAULT_CONFIG` in `firmware/src/config.rs`.
+
+Only normal and SPIKE profiles are implemented. SPIKE reads `SPIKE_DHT_PIN` and expects a MOSFET or open-drain transistor to disturb the sensor DATA line. `firmware/src/main.rs` must construct SNTP from `NTP_SERVER`, not `EspSntp::new_default()`.
+
+```bash
+cd firmware
+cargo check
+cargo build --release
+espflash flash target/xtensa-esp32s3-espidf/release/cesta-firmware --monitor
+```
+
+Payload:
+
+```json
+{"device_id": "esp32_01", "timestamp": 1718000000, "temperature": 25.3, "humidity": 60.1}
+```
+
+A lab deployment can use Mosquitto, Telegraf, InfluxDB, Grafana, and a Python subscriber that exports CSV data to `data/raw/esp32_dht11/`.
+
+## Development
 
 ```bash
 uv run ruff check src/CESTA
@@ -167,34 +122,4 @@ uv run ruff format src/CESTA
 uv run pyright src/CESTA
 ```
 
-After code changes, run the most targeted validation first, then broaden to ruff and pyright when appropriate.
-
-## Firmware
-
-The optional firmware stack targets ESP32-S3 devices collecting DHT11 readings and publishing JSON payloads over MQTT. See [`firmware/README.md`](firmware/README.md) for build, flash, MQTT, and lab deployment details.
-
-## Extension points
-
-### Add a dataset
-
-1. Implement a `BaseDataset` subclass in `src/CESTA/datasets/raw/`.
-2. Define `name`, feature columns, grouping, timestamp handling, loading, and preprocessing.
-3. Register it in `src/CESTA/datasets/raw/__init__.py`.
-
-### Add a fault type
-
-1. Add the enum value in `src/CESTA/schema/fault.py`.
-2. Implement an injector in `src/CESTA/injection/faults.py`.
-3. Register it in `src/CESTA/injection/registry.py`.
-4. Add default Markov settings in `MarkovConfig._default_fault_configs()` if it should be part of the standard injection profile.
-
-### Add a model
-
-1. Implement a `BaseModel` subclass under `src/CESTA/models/temporal/` or `src/CESTA/models/spatial/`.
-2. Declare required metadata such as `graph` or `node_identity` when needed.
-3. Add metadata extraction logic in `src/CESTA/models/registry.py` if the constructor needs dataset metadata.
-4. Register the model in `src/CESTA/models/registry.py`.
-
-## Repository status
-
-This is an active research repository. APIs and experiment settings may change as hypotheses are tested. Treat `docs/PROPOSAL.md` as research intent, `docs/EXPERIMENT.md` as the shared protocol, `docs/results/` as provisional evidence, `PLAN.md` as the unresolved-work tracker, and checked-in configs as executable experiment definitions.
+Run targeted tests for changed behavior before broad lint and type checks. The repository is active research software; checked-in configs are the executable experiment definitions, and evidence remains provisional until the protocol in `docs/RESEARCH.md` is complete.

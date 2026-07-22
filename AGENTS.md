@@ -1,370 +1,112 @@
 # AGENTS.md
 
-AGENTS MUST KEEP THIS FILE UP TO DATE AFTER A CODE CHANGE.
-This repository is a research project for fault diagnosis analysis.
+Keep this file current after code changes. CESTA is a research project for communication-aware sensor fault diagnosis.
 
-## Environment Management
+## Development rules
 
-- Use **uv** for Python environment management.
+- Use `uv` for Python environments and commands.
+- Run targeted validation first, then `uv run ruff check src/CESTA` and `uv run pyright src/CESTA` after Python source changes.
+- Ruff uses line length 150 and import sorting from `pyproject.toml`.
+- Use `from __future__ import annotations` and lazy function imports instead of `typing.TYPE_CHECKING`.
+- Reconsider names whenever their purpose changes.
+- Keep every notebook import block in its top cell.
 
-## Code Quality
+## Documentation
 
-- Use **ruff** for linting and formatting `.py` source files. Ruff is configured in `pyproject.toml` with line length 150 and import sorting enabled. Check source with `uv run ruff check src/CESTA`.
-- Use **pyright** for type checking `.py` source files. Check source with `uv run pyright src/CESTA`.
-- Run meaningful validation after code changes: use targeted parse/unit/behavior checks for the changed path first, then ruff/pyright before finishing. Do not run no-op commands just to satisfy validation.
-- Do **not** use `TYPE_CHECKING` from `typing`. Use `from __future__ import annotations` and lazy imports inside functions instead.
-- When changing a function, file, class, or variable, **always reconsider whether its name still accurately describes its purpose**. Rename if the name no longer fits.
+- `README.md`: setup, workflow, capabilities, firmware, and repository layout.
+- `docs/RESEARCH.md`: the single research document containing aim, protocol, evidence, work plan, and hard boundaries.
+- Do not create separate proposal, experiment, result, plan, or subsystem documents. Merge durable project guidance into `README.md` or `AGENTS.md`, and research updates into `docs/RESEARCH.md`.
 
-## Notebook Conventions
+## Architecture
 
-- In every Jupyter notebook, the **import block must be in the top cell**.
-
-## Project Structure
-
-```
+```text
 src/CESTA/
-├── schema/            # Pydantic config and manifest schemas split by domain
-├── batch.py           # Runtime batch contracts shared by training/evaluation/spatial models
-├── metrics.py         # Shared classification metrics used by training and evaluation
-├── artifacts.py       # Cross-layer run artifact, manifest, and checkpoint helpers
-├── workflows/         # Reusable train/evaluate orchestration above domain packages, below CLI
-├── cli/               # Typer CLI with subcommands (inject, prepare, train, evaluate)
-├── injection/         # Fault injection: Markov generator, fault injectors, registry
-├── datasets/          # Dataset loaders and canonical artifact containers
-│   ├── raw/           # Raw sources: BaseDataset, IntelLabDataset, registry
-│   ├── artifact.py    # Canonical CESTADataset, GraphMetadata, load_dataset
-│   └── windowed.py    # Windowed split containers and helpers
-├── models/            # Deep learning model definitions
-│   ├── temporal/      # Temporal models: CNN1D, LSTM, GRU, Transformer, Autoformer, Informer, PatchTST, ModernTCN
-│   └── spatial/       # Spatial models: ST-GCN, CESTA
-├── training/          # Trainer, focal loss, oversampling, and callbacks
-├── evaluation/        # Evaluator, result persistence, communication metrics, and benchmark auditing
-├── optimization/      # Optuna search spaces and Optimizer for HPO
-├── utils.py           # Shared runtime helpers (git/env collectors, run id, sha256)
-├── seed.py            # seed_everything() utility for reproducibility
+├── schema/          # Pydantic configuration and artifact schemas
+├── batch.py         # Runtime batch contracts
+├── metrics.py       # Shared classification metrics
+├── artifacts.py     # Run directories, manifests, and checkpoints
+├── workflows/       # Train/evaluate orchestration
+├── cli/             # Thin Typer wrappers
+├── injection/       # Markov faults and injectors
+├── datasets/        # Raw loaders and canonical artifacts
+├── models/          # Temporal and spatial models
+├── training/        # Trainer, objectives, losses, and callbacks
+├── evaluation/      # Evaluation, communication, energy, and benchmarks
+├── optimization/    # Optuna search
+├── utils.py         # Git, environment, ID, time, and hashing helpers
+└── seed.py          # Reproducibility helper
 
-firmware/              # ESP32-S3 Rust firmware (esp-idf-hal, PlatformIO-free)
-config/                # YAML config files per model (lstm.yaml, gru.yaml, etc.)
-data/                  # Raw datasets and injected outputs
-docs/                  # Research plans and experiment documentation, including CESTA
-notebooks/             # Jupyter notebooks for analysis
+config/              # Data, model, diagnosis, and benchmark configs
+docs/RESEARCH.md     # Consolidated research record
+firmware/             # ESP32-S3 Rust firmware
+notebooks/            # Analysis notebooks
+runs/                 # Generated artifacts
 ```
 
-## Research Documentation
+## Core contracts
 
-- `docs/PROPOSAL.md` - Stable research intent: motivation, hypotheses, success criteria, design constraints, scope, and risks.
-- `docs/EXPERIMENT.md` - Shared experiment protocol: datasets, metrics, baselines, selection rules, ablations, and reproducibility requirements.
-- `docs/experiments/` - Focused plans for experiment batches that need setup details beyond the shared protocol.
-- `docs/results/` - Scoped provisional result memos. Name files by dataset, experiment, or snapshot; do not call unfinished evidence a final comparison.
-- `PLAN.md` - Unresolved research work, priorities, completion criteria, and hard boundaries. Do not duplicate result tables here.
+- Import configuration schemas from their domain modules under `schema/`; `schema/types.py` is a compatibility shim.
+- `GraphWindowBatch` in `batch.py` is the native graph runtime contract used by loaders, trainers, evaluators, ST-GCN, and CESTA.
+- Import classification metrics from `CESTA.metrics`; `evaluation/metrics.py` is a compatibility shim.
+- Keep `artifacts.py` independent of models, training, evaluation, CLI, and workflows. It uses a structural checkpoint protocol.
+- Keep CLI modules thin. Cross-package train/evaluate behavior belongs in `workflows/`.
+- Prefer config-file-first command surfaces for large runtime settings; validate YAML/JSON directly into Pydantic models.
 
+## Data
 
-## Schema Module (`schema/`)
+`CESTADataset` is the canonical post-transform artifact. A dataset requires `dataset.csv`, `dataset_meta.json`, `graph_edges.npz`, `dynamic_link_mask.npz`, `node_positions.json`, and `edge_distances.npz`; legacy names are unsupported.
 
-The `schema/` module contains Pydantic configuration and artifact schemas used by injection, training, evaluation, and reproducibility manifests:
+`CESTADataset.prepare()` returns `WindowedSplits`. Graph metadata travels in `WindowedSplits.metadata["graph"]`. Temporal models may request `node_identity`; graph models declare `required_metadata = {"graph"}`. `create_model()` validates requirements and extracts metadata-backed constructor arguments.
 
-- `schema/fault.py`: `FaultType`, `FaultConfig`, `MarkovConfig`.
-- `schema/window.py`: `WindowConfig`, `DataSplitConfig`, `DataConfig`.
-- `schema/config.py`: `InjectionConfig`, `TrainConfig`, `EvaluateConfig`, `OptimizeConfig`.
-- `schema/manifest.py`: `RunManifest`, `EnvInfo`, `GitInfo`, `DatasetInfo`, `Timing`.
-- `schema/types.py`: backward-compatible re-export shim only; prefer importing from `schema.fault` or `schema.window` in new code.
+`WindowedSplit.select()` must apply one index selection to every aligned field. Preserve missing nodes and unavailable links through node and edge masks. For non-graph models using `connectivity-chronological`, preserve the graph cohort's active communication block and split boundaries while dropping only incomplete node windows.
 
-## Runtime Batch Contract (`batch.py`)
+To add a raw dataset, subclass `BaseDataset` under `datasets/raw/` and register it in `datasets/raw/__init__.py`. To add a fault, update `schema/fault.py`, implement it in `injection/faults.py`, register it in `injection/registry.py`, and add defaults to `MarkovConfig` when applicable.
 
-- `GraphWindowBatch` - Native PyTorch runtime batch for graph-aligned windows: `x`, `y`, `node_mask`, `edge_index`, and `edge_mask`. Used by DataLoader collation, `Trainer`, `Evaluator`, ST-GCN, and CESTA. It is not a schema/config object and should not live under `schema/` or dataset windowing utilities.
+## Training and evaluation
 
-## Utilities (`utils.py`)
+- Call `seed_everything(config.seed)` before model construction.
+- `Trainer` receives validation data explicitly and supports focal loss, aligned oversampling, callbacks, and composed auxiliary objectives.
+- Keep shared masked loss, decoding, and auxiliary objectives in `training/objectives.py`, not model-specific branches in the trainer.
+- `Evaluator` handles device placement, masked predictions, metrics, and communication aggregation.
+- `EvalResult.save()` writes classification artifacts and `communication_metrics.json` when available.
+- Energy accounting belongs in `evaluation/energy.py`, outside models. Count TX and RX for each active directed message using graph-aligned distances and serialize constants, units, distance source, shares, totals, and dense-reference reductions.
 
-Single-file module with shared runtime helpers, used mainly by the train/evaluate CLIs:
+Each training invocation creates a new, never-overwritten run:
 
-- `collect_git_info(cwd=None)` - commit SHA, branch, dirty flag (via `dulwich`, no `git` binary required)
-- `collect_env_info(device)` - python / torch / cuda / host / device name / cesta version
-- `generate_run_id(model, seed, git)` - `<utc_ts>_<model>_seed<seed>_<shortsha>` (non-pure: samples wall clock)
-- `utc_now_iso()` - ISO-8601 UTC timestamp
-- `sha256_file(path)` - streaming SHA-256 of a file (used by `CESTADataset.describe`)
-
-## Metrics
-
-`metrics.py` owns shared classification metrics (`ClassMetrics`, `compute_class_metrics`, `macro_f1`, `confusion_matrix`) used by both training and evaluation. `evaluation/metrics.py` is a backward-compatible re-export shim only; new imports should use `CESTA.metrics`.
-
-## Run Artifacts
-
-`artifacts.py` owns cross-layer helpers for run-directory creation, manifest writing, checkpoint metadata paths, checkpoint save/load, and registry-backed checkpoint reconstruction. It uses a structural checkpoint protocol instead of importing `BaseModel`, so it remains independent of `models`, `training`, `evaluation`, and `cli`; those layers may import artifact helpers, but artifacts should not import upward into orchestration code.
-
-`workflows/` owns reusable train/evaluate orchestration that crosses datasets, model registry, trainer/evaluator, and artifacts. CLI modules should stay thin Typer wrappers that validate command inputs and call workflow functions.
-
-Every `cesta train` invocation creates a dedicated run directory; runs are never overwritten.
-
-```
-runs/<model>/<utc_ts>_<model>_seed<seed>_<shortsha>/
-├── weight.pt              # best-val-loss checkpoint
-├── config.json            # {model_name, model_config, train_config}
-├── history.jsonl          # one JSON TrainMetrics per epoch (HistoryCallback)
-├── manifest.json          # RunManifest: git, env, dataset hash, timing, configs
-├── eval_metrics.json      # loss, accuracy, macro_f1, per_class, class_names, confusion_matrix, train_config, injection_config
-├── communication_metrics.json # communication counts plus TX+RX radio-energy metrics for communication-aware models
-└── predictions.npz        # y_true, y_pred (int32), y_prob (float32)
+```text
+runs/<model>/<run_id>/
+├── weight.pt
+├── config.json
+├── history.jsonl
+├── manifest.json
+├── eval_metrics.json
+├── predictions.npz
+└── communication_metrics.json  # when applicable
 ```
 
-`cesta evaluate` writes the same artifacts (plus a `kind="evaluate"` `manifest.json`) into a new run subdirectory when `--output` is provided; otherwise it writes in-place alongside the loaded model.
+## CESTA model
 
-## Configuration Design Pattern
+`CESTAClassifier` is under `models/spatial/cesta/` and accepts graph-aligned input `(batch, window, nodes * features)`. Modes are `none`, `dense`, and `gumbel_request`.
 
-Avoid constructing large runtime settings by layering many optional CLI values over schema-created config objects. Large command surfaces should be config-file-first. Small command surfaces may define direct Typer defaults when each option is simple and local.
+Request decisions must use receiver-local state, local uncertainty, and edge metadata only. They cannot inspect sender hidden states before communication. Aggregation uses receiver queries and received sender keys/values, softmax over the received set only, and zero graph context when none are received.
 
-**Pattern**:
-```python
-@app.command()
-def train(config: Path, data: Path):
-    train_config = TrainConfig.model_validate(load_config_file(config))
-```
+The model may expose communication statistics, neighbor beliefs, boundary logits, CRF decoding, communication-conditioned correction, structured top-k requests, and VOI objectives. Keep transmitted-bit estimates aligned with the actual payload and preserve gradient-bearing communication ratios for training penalties. Evaluation aggregates per-edge requested/possible counts against canonical graph distances.
 
-For small commands:
-```python
-@app.command()
-def show(top: int = 10):
-    ...
-```
+## Firmware
 
-**Rationale**:
-- Avoids duplicated CLI/schema merge logic
-- Keeps complex experiment settings reproducible in checked config files
-- Keeps small utility commands ergonomic
-- Makes validation explicit at config-file boundaries
+The ESP32-S3 firmware lives under `firmware/`. `firmware/src/config.rs` selects normal or SPIKE profiles; SPIKE reads `SPIKE_DHT_PIN` and expects an external DATA-line disturbance. `main.rs` must construct SNTP from `NTP_SERVER`, not `EspSntp::new_default()`. Build and deployment commands are in `README.md`.
 
-## Datasets Module (`datasets/`)
+## Commands
 
-Organized into two sub-packages by pipeline stage:
-
-### Raw Sub-package (`datasets/raw/`)
-
-Pre-injection dataset loaders.
-
-- `BaseDataset` (`raw/base.py`) - Abstract base for raw dataset loaders: `name`, `feature_columns`, `group_column`, `timestamp_column`, `load()`, `preprocess()`.
-- `IntelLabDataset` (`raw/intel_lab.py`) - Concrete loader for Intel Berkeley Research Lab sensor data.
-- `get_dataset` / `list_datasets` (`raw/__init__.py`) - Static raw dataset lookup backed by `_DATASET_LOADERS`.
-
-### Canonical Artifact Dataset
-
-Post-transform data is stored as a self-contained canonical artifact and loaded through `CESTADataset` (`datasets/artifact.py`). The required files are `dataset.csv`, `dataset_meta.json`, `graph_edges.npz`, `dynamic_link_mask.npz`, `node_positions.json`, and `edge_distances.npz`; legacy dataset file names are not supported.
-
-- `CESTADataset` (`datasets/artifact.py`) - Canonical runtime dataset with injected labels, directed graph topology, dynamic link masks, node positions, edge distances, save/load, summary, and `.prepare(window_config, split_config, features, required_metadata) -> WindowedSplits`.
-- `GraphMetadata` (`datasets/artifact.py`) - Typed dataclass holding directed edge metadata: `edge_index`, `edge_prob`, `node_ids`, `num_nodes`, dynamic-link metadata, and `edge_distance_m` aligned with `edge_index` columns.
-- `WindowedSplit` / `WindowedSplits` (`datasets/windowed.py`) - Unified dataclasses holding aligned windowed partitions and split collections + `metadata` dict. Includes input-shape metadata and split-availability flags. `WindowedSplit.select()` applies one index selection to features, labels, masks, and node IDs.
-- `load_dataset` (`datasets/artifact.py`) - Loads a canonical `CESTADataset` and requires all canonical artifact files.
-- `validate_features` and `collect_splits` (`datasets/windowed.py`) - Shared helpers for feature validation and aligned split assembly.
-
-Package-root exports are intentionally narrow: `CESTA.datasets` exports only `CESTADataset`, `GraphMetadata`, `load_dataset`, `get_dataset`, and `list_datasets`.
-
-### Data Preparation Pattern
-
-All canonical datasets expose a `.prepare(window_config, split_config, required_metadata=...)` method returning `WindowedSplits`. The train CLI loads `TrainConfig.data.window` and `TrainConfig.data.split`, calls `load_dataset(path)`, then `dataset.prepare(window_config=config.data.window, split_config=config.data.split, required_metadata=model_cls.required_metadata)`. When graph metadata is not requested, graph-aligned canonical datasets fall back to temporal windows for non-graph models; if the requested split strategy is `connectivity-chronological`, the fallback uses the same active communication block and split boundaries as graph models, dropping only node windows with missing samples. Graph metadata travels via `WindowedSplits.metadata["graph"]`. Temporal models can request `node_identity` metadata by setting `node_embedding_dim > 0` in `model_kwargs`; the train/evaluate loaders then pass per-window node IDs through `TemporalWindowBatch`.
-
-`create_model` accepts `metadata` and automatically validates model requirements and extracts architecture-specific kwargs (e.g. `num_nodes`, `edge_index`, and `edge_prob` for graph models).
-
-```python
-dataset = load_dataset(data)
-model_cls = get_model_class(config.model)
-prepared = dataset.prepare(window_config=config.data.window,
-                           split_config=config.data.split,
-                           features=config.features,
-                           required_metadata=model_cls.required_metadata)
-net = create_model(config.model, input_size=prepared.input_size,
-                   num_classes=num_classes, metadata=prepared.metadata)
-```
-
-## Training Module (`training/`)
-
-- `FocalLoss` (`loss.py`) - Focal loss for imbalanced multi-class classification. gamma=0 recovers CE.
-- `oversample_split` (`oversampling.py`) - Split-aware oversampling: duplicates windows containing labels other than `normal_class_id` until minority count reaches `ratio * majority_count`, applying one sampled index vector through `WindowedSplit.select()` so features, labels, masks, and future aligned metadata stay synchronized. `oversample_minority` remains only as a compatibility wrapper.
-- `Trainer` (`trainer.py`) - Full training loop with Adam optimizer, optional focal loss, optional oversampling, metric collection, and callback hooks. Returns `TrainResult` with per-epoch history. Expects val data passed explicitly (produced by `dataset.prepare()`). The train CLI and Optuna optimizer call `seed_everything(config.seed)` before model construction so initial weights, training RNG, and DataLoader shuffling are tied to the config seed.
-- `objectives.py` - Shared masked-loss, prediction decoding, valid-output filtering, and composed auxiliary training objectives (communication, VOI, boundary, CRF, persistence) used by trainers/evaluators without embedding model-specific objective logic in the training loop.
-- `TrainingCallback` (`callbacks.py`) - Abstract base; implementations: `LoggingCallback`, `EarlyStoppingCallback`, `CheckpointCallback`, `HistoryCallback` (per-epoch JSONL dump of `TrainMetrics`).
-
-## Evaluation Module (`evaluation/`)
-
-- `compute_class_metrics` (`metrics.py`) - Per-class precision, recall, F1, support from prediction tensors.
-- `macro_f1` (`metrics.py`) - Macro-averaged F1 from per-class metrics.
-- `Evaluator` (`evaluator.py`) - Runs inference on a dataset, computes all metrics, captures predictions (y_true, y_pred, y_prob), returns `EvalResult`. Handles device placement.
-- `EvalResult` (`result.py`) - Dataclass holding loss, accuracy, macro_f1, per-class ClassMetrics, y_true, y_pred, y_prob, and optional communication metrics. Has `save(path)` to persist `eval_metrics.json`, `predictions.npz`, and `communication_metrics.json` when available. Has `load(path)` class method.
-- `communication.py` - Aggregates per-batch communication stats into split-level counts, preserves per-edge requested/possible counts, and attaches dense-reference TX+RX energy metrics when graph distances are available.
-- `energy.py` - First-order radio-energy accounting utility outside the model. Uses `GraphMetadata.edge_distance_m`, counts TX and RX energy per active sender→receiver message, supports free-space and multipath regimes with `d0 = sqrt(E_fs / E_mp)`, and serializes constants, units, distance source, TX/RX shares, totals, and dense-vs-selective reductions.
-- `benchmark.py` - Matches manifests to a checked-in expected matrix without using test performance, validates metric and energy identities, rejects missing, duplicate, or incomparable cells, and emits deterministic run-level records. Run `uv run python scripts/audit_decisive_comparison.py --spec config/benchmark/decisive-comparison.yaml --runs-root runs --output runs/decisive-comparison-audit --allow-incomplete`; omit `--allow-incomplete` when the matrix should be complete.
-- `benchmark_summary.py` - Aggregates normalized classification records and computes explicit dataset-and-seed paired differences with deterministic bootstrap intervals. It never chooses a comparator from test scores. Run `uv run python scripts/summarize_decisive_comparison.py --runs-csv runs/decisive-comparison-audit/runs.csv --output runs/decisive-comparison-summary --comparison <variant> <locked-reference>`.
-
-## Firmware Module (`firmware/`)
-
-Rust firmware for ESP32-S3 with DHT11 sensor, built with `esp-idf-hal` (std environment).
-
-### Structure
-
-```
-firmware/
-├── Cargo.toml            # Dependencies: esp-idf-svc, esp-idf-hal, serde_json
-├── build.rs              # ESP-IDF build integration via embuild
-├── sdkconfig.defaults    # ESP-IDF Kconfig (WiFi, SNTP, MQTT)
-├── .cargo/config.toml    # Target: xtensa-esp32s3-espidf
-└── src/
-    ├── main.rs           # Entry point: init → WiFi → NTP → sensor read/fault/MQTT loop
-    ├── config.rs         # WiFi/MQTT/device pins and selected firmware fault profile
-    ├── wifi.rs           # BlockingWifi connection via esp-idf-svc
-    ├── mqtt.rs           # EspMqttClient connection and publish
-    ├── fault.rs          # Firmware-level/hardware-assisted fault profiles
-    └── dht.rs            # Bit-banged DHT11 protocol over GPIO
-```
-
-### Firmware Fault Profiles
-
-`firmware/src/config.rs` selects the per-device firmware profile with `FAULT_CONFIG`. Only `FAULT_NORMAL` and `FAULT_SPIKE` are currently implemented. The normal sensor path reads `DHT_PIN`; SPIKE reads a separate `SPIKE_DHT_PIN` and the main loop logs both normal and spike paths. SPIKE should be injected in hardware by using a MOSFET or open-drain transistor to briefly pull the spike sensor DATA line toward GND; firmware only reads that disturbed DATA path and uses `bypass_checksum=true` so corrupted frames are still emitted for diagnosis experiments.
-
-### Firmware SNTP
-
-`firmware/src/main.rs` builds an explicit `SntpConf` from `config::NTP_SERVER`; do not use `EspSntp::new_default()` when debugging a configured timestamp server because it ignores `config::NTP_SERVER` and uses the crate's pool defaults. The sync wait is configured by `NTP_SYNC_TIMEOUT_SECS` / `NTP_SYNC_POLL_MS`, and the boot log prints `FIRMWARE_BUILD_TAG` plus the active NTP timing values to verify the flashed binary.
-
-### MQTT Payload
-
-Publishes JSON to `cesta/readings/<device_id>` every 30s:
-```json
-{"device_id": "esp32_01", "timestamp": 1718000000, "temperature": 25.3, "humidity": 60.1}
-```
-
-### Build & Flash
-
-Requires `espup` (Rust ESP toolchain) and `espflash`:
 ```bash
-cd firmware
-cargo check
-cargo build --release
-espflash flash target/xtensa-esp32s3-espidf/release/cesta-firmware --monitor
+uv run cesta transform intel_lab data/raw/Intel/data.txt data/datasets/intel_lab --config config/data/intel_fault15.yaml
+uv run cesta train config/model/lstm.yaml data/canon/intel_lab
+uv run cesta evaluate --model runs/lstm/<run_id> --data data/canon/intel_lab
+uv run cesta optimize --data data/canon/intel_lab --model lstm --n-trials 20 --epochs 10
+
+uv run python scripts/run_all_baselines.py --dry-run
+uv run python scripts/audit_decisive_comparison.py --spec config/benchmark/decisive-comparison.yaml --runs-root runs --output runs/decisive-comparison-audit --allow-incomplete
+uv run python scripts/summarize_decisive_comparison.py --runs-csv runs/decisive-comparison-audit/runs.csv --output runs/decisive-comparison-summary --comparison <variant> <locked-reference>
 ```
 
-### Lab Server Stack
-
-ESP32 devices connect via WiFi to an on-prem MQTT broker (Mosquitto). Recommended stack:
-- **Mosquitto** — MQTT broker
-- **Telegraf** — MQTT → InfluxDB bridge
-- **InfluxDB** — Time-series storage
-- **Grafana** — Dashboard
-- **Python MQTT subscriber** — Export to `data/raw/esp32_dht11/` CSV for CESTA pipeline
-
-## Workflow
-
-1. **Data Transform**: `uv run cesta transform intel_lab data/raw/Intel/data.txt data/datasets/intel_lab --config config/data/intel_fault15.yaml`
-2. **Training**: `uv run cesta train config/model/lstm.yaml data/canon/intel_lab`
-4. **Baseline Sweep**: `uv run python scripts/run_all_baselines.py` runs all default baseline configs on `data/datasets/Intel_fault05`, `Intel_fault10`, `Intel_fault15`, and `Intel_fault20` with seeds `12`, `42`, and `1242`. It reconciles completed tasks from run manifests using the resolved training config, seed, and dataset hashes, so deleted progress logs do not cause duplicate training. It writes in-progress state under `runs/baseline_sweep_state.json` and `runs/baseline_sweep_events.jsonl`, then deletes those logs after all runs finish unless `--keep-progress-log` is set. Use `--dry-run` to inspect planned/remaining runs. Configs under `config/model/diagnosis/split_matched/` preserve each temporal architecture and training settings while using CESTA's `70/15/15 connectivity-chronological` split and validation-macro-F1 checkpointing; use these for direct decisive-comparison accuracy claims, not the legacy `80/10/10` baseline results.
-3. **Hyperparameter Search** (optional): `uv run cesta optimize --data data/canon/intel_lab --model lstm --n-trials 20 --epochs 10`
-4. **Evaluation**: `uv run cesta evaluate --model runs/lstm/<run_id> --data data/canon/intel_lab`
-
-## Optimization Module (`optimization/`)
-
-Optuna-driven hyperparameter search. Each trial samples both training-loop
-hyperparameters (learning rate, batch size, focal loss, oversampling) and
-model-architecture hyperparameters from a per-model search space, then trains
-a fresh model with `Trainer` for `OptimizeConfig.epochs` epochs and reports
-the configured validation metric back to Optuna.
-
-- `Optimizer` (`optimizer.py`) - Builds the study (sampler/pruner/storage),
-  loads the dataset once, and runs `n_trials`. Reports per-epoch metric to
-  Optuna and supports pruning via `_OptunaPruneCallback` (a `TrainingCallback`
-  that returns `False` when `trial.should_prune()` fires, stopping the
-  trainer early and raising `optuna.TrialPruned`).
-- `search_spaces.py` - Per-model `(trial) -> dict` functions registered for
-  `lstm`, `gru`, `cnn1d`, `transformer`, `autoformer`, `informer`, `patchtst`,
-  `modern_tcn`, `stgcn`. `suggest_train_hyperparams` covers shared training
-  knobs. Use `register_search_space(name, fn)` to add new model spaces.
-- Studies persist to `OptimizeConfig.storage` (default `sqlite:///optuna.db`)
-  under `OptimizeConfig.resolved_study_name()` (default `cesta-<model>`),
-  so runs can be resumed (`load_if_exists=True`).
-
-### CLI
-
-```
-cesta optimize --data <dir> [--model lstm] [--n-trials N] [--epochs E]
-               [--metric val_loss|val_macro_f1|val_acc] [--sampler tpe|random]
-               [--pruner median|none] [--study-name NAME] [--storage URL]
-               [--timeout SECONDS] [--seed S] [--output best_params.json]
-cesta optimize show <study_name> [--storage URL] [--top K]
-```
-
-The `--metric` option auto-aligns the study direction (`val_loss` →
-minimize, others → maximize). The selected metric must be available in
-`TrainMetrics`; the dataset must have a non-empty validation split.
-
-## CLI Structure
-
-The CLI uses **Typer** with a centralized command namespace:
-
-```
-cesta                    # Main entry point
-├── transform           # Transform raw data into a canonical dataset
-├── train               # Train a model
-├── evaluate            # Evaluate a model
-├── optimize            # Run Optuna hyperparameter optimization
-│   └── show            # Display study results
-└── list                # List datasets, models, or metrics
-```
-
-Run `cesta --help` or `cesta <subcommand> --help` for detailed options.
-
-## Adding New Fault Types
-
-1. Add new value to `FaultType` enum in `schema/types.py`.
-2. Create injector class in `injection/faults.py` subclassing `BaseFaultInjector`.
-3. Register in `injection/registry.py` with `register_fault()`.
-4. Add default config in `MarkovConfig._default_fault_configs()`.
-
-## Fault Injection Parameters
-
-Per-event randomization and per-mote scaling are first-class:
-
-- **Per-event random ranges**: `magnitude_range`, `drift_rate_range` are tuples
-  `(min, max)`; the injector samples a fresh value per fault event.
-- **Per-mote sigma scaling**: `magnitude_sigma_range` (SPIKE) and
-  `drift_rate_sigma_range` (DRIFT) are tuples interpreted as multipliers on
-  the mote's local std. They override the absolute ranges when present.
-  `FaultInjector` (`injection/injector.py`) computes per-(mote, feature) std
-  and median from the NORMAL portion and injects them as `_mote_std` /
-  `_mote_median` into `params` before calling each injector's `apply()`.
-- **STUCK jitter**: `jitter_sigma_factor` adds Gaussian noise of std
-  `factor * _mote_std` around the frozen value to simulate subtle freezes.
-- **Defaults** (`MarkovConfig._default_fault_configs`) are tuned for a
-  challenging benchmark: ~5-7% combined fault ratio, sigma-relative
-  magnitudes, randomized drift rates, jittered stuck.
-
-## Adding New Datasets
-
-1. Implement a new dataset class in `src/CESTA/datasets/raw/` subclassing `BaseDataset`.
-2. Implement: `name`, `feature_columns`, `group_column`, `timestamp_column`, `load()`, `preprocess()`.
-3. Add it to `_DATASET_LOADERS` in `datasets/raw/__init__.py`.
-
-## Model Metadata Requirements
-
-Models declare required dataset metadata via `required_metadata` (a `ClassVar[set[str]]` on `BaseModel`). The model registry (`create_model`) validates these before construction and extracts architecture-specific kwargs automatically.
-
-```python
-class STGCNClassifier(BaseModel):
-    required_metadata: ClassVar[set[str]] = {"graph"}
-```
-
-To add a new model that needs special metadata:
-1. Set `required_metadata` on the model class.
-2. Add extraction logic to `_extract_metadata_kwargs` in `models/registry.py`.
-
-## CESTA Model (`models/spatial/cesta/`)
-
-`CESTAClassifier` lives in `models/spatial/cesta/model.py`; communication helpers are in `models/spatial/cesta/communication.py`, and CRF sequence helpers are in `models/spatial/cesta/sequence.py`.
-
-`CESTAClassifier` is registered as `cesta` and requires graph metadata. It expects graph-aligned input `(batch, window_size, num_nodes * features_per_node)` and returns logits `(batch, window_size, num_nodes, num_classes)`. Supported `communication_mode` values are `"none"` for the temporal-only fixed backbone, `"dense"` for all non-self graph edges with full hidden-state messages, and `"gumbel_request"` for receiver-side straight-through Gumbel request gating with full hidden-state messages. The per-node temporal encoder supports `bidirectional=True`; attention, fusion, classifier, gate features, and transmitted-bit estimates use the doubled encoder output size when enabled. Gumbel request gating is per receiver-sender edge using receiver local hidden state, local classifier entropy, local classifier margin, and edge probability from graph metadata; it does not inspect sender hidden state before requesting. Dense and Gumbel modes use GAT-inspired single-head attention aggregation: Q from local hidden, K/V from received neighbor hiddens, softmax over received set only, zero-vector when no neighbors requested. Optional `use_neighbor_belief=True` appends sender local diagnostic belief features (class probabilities, entropy, margin) to each hidden-state message and lets fusion/logit correction consume neighbor belief means and local-neighbor belief contrasts; transmitted-bit estimates include those extra belief fields. Optional `use_boundary_head=True` predicts per-node change-point logits exposed via `last_boundary_logits`; `TrainConfig.boundary_loss_weight` adds focal BCE supervision on valid label transitions with optional temporal dilation, and `use_boundary_gated_correction=True` softly boosts logit correction near predicted boundaries. Optional `use_crf=True` adds a learned linear-chain transition matrix over class labels; `TrainConfig.crf_loss_weight` adds masked CRF negative log-likelihood during training and the trainer/evaluator use Viterbi decoding for predictions. Optional `use_communication_conditioned_correction=True` augments logit correction with communicated-vs-local belief features so correction can learn when received neighbor evidence should override or confirm local evidence. Optional `structured_request_topk > 0` reparameterizes Gumbel request gating into a receiver-side need gate plus top-k neighbor ranker that still uses only receiver local state, receiver uncertainty, and edge metadata before communication. `TrainConfig.voi_gate_loss_weight` adds a value-of-information gate loss that penalizes communication when communicated logits fail to improve the correct-class logit over local-only logits. `TrainConfig.counterfactual_voi_loss_weight` adds a per-node/timestep counterfactual VOI objective using local versus communicated correct-class logits and receiver communication activity. Graph fusion uses `local_hidden + sigmoid(graph_residual_logit) * fused`, initialized by `graph_residual_init` (default `1.0`; set `0.1` in residual diagnosis configs) to preserve local evidence while learning graph-update strength. The latest forward communication counters are available via `last_communication_stats` with active ratio, requested/possible edge counts, transmitted-bit estimate, and compression-count fields; `auxiliary_loss` exposes a gradient-preserving communication ratio tensor for generic trainer penalties. `TrainConfig.communication_penalty_weight` adds that auxiliary loss when present. Evaluation writes `communication_metrics.json` for communication-aware models.
-
-`last_communication_stats` includes split-aggregatable per-edge requested/possible counts aligned to canonical graph edges plus `bits_per_message`; `evaluation.communication` combines those counts with `GraphMetadata.edge_distance_m` to write TX+RX energy metrics.
-
-## CLI Options (transform run)
-
-Large data transformation settings live in YAML/JSON config files and are validated directly with Pydantic.
-
-```
-DATASET                Dataset name (required positional argument)
-RAW_PATH               Path to raw data file or directory (required positional argument)
-OUTPUT                 Output path for canonical dataset directory (required positional argument)
--c, --config           Path to YAML/JSON transform config file
-```
+The baseline runner reconciles completed cells from manifests and resolved configs. Use split-matched diagnosis configs for direct CESTA accuracy claims; legacy `80/10/10` runs are descriptive only. The benchmark auditor rejects missing, duplicate, inconsistent, or incomparable cells without selecting by test performance.
