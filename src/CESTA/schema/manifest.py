@@ -79,6 +79,7 @@ class RunManifest(BaseModel):
     seed: int
     model: str
     num_parameters: int | None = None
+    total_parameters: int | None = None
 
     git: GitInfo = Field(default_factory=GitInfo)
     env: EnvInfo

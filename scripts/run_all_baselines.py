@@ -76,6 +76,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--seeds", nargs="+", type=int, default=list(DEFAULT_SEEDS), help="Seeds to run for each config/dataset pair.")
     parser.add_argument("--runner", nargs="+", default=["uv", "run", "cesta"], help="Command prefix used to invoke the CESTA CLI.")
     parser.add_argument("--early-stopping", action="store_true", help="Forward --early-stopping to cesta train.")
+    parser.add_argument("--no-test-evaluation", action="store_true", help="Train and checkpoint using validation data without evaluating test data.")
     parser.add_argument("--restart", action="store_true", help="Ignore existing progress state and start from scratch.")
     parser.add_argument("--keep-progress-log", action="store_true", help="Keep progress logs after every run finishes.")
     parser.add_argument("--dry-run", action="store_true", help="Print the planned and remaining run count without launching training.")
@@ -126,12 +127,12 @@ def build_tasks(configs: list[Path], datasets: list[Path], seeds: list[int]) -> 
     ]
 
 
-def discover_completed_tasks(tasks: list[BaselineTask], runs_dir: Path) -> dict[str, dict[str, Any]]:
+def discover_completed_tasks(tasks: list[BaselineTask], runs_dir: Path, *, require_test_artifacts: bool = True) -> dict[str, dict[str, Any]]:
     expected = {_task_signature(task): task for task in tasks}
     completed: dict[str, dict[str, Any]] = {}
     for manifest_path in sorted(runs_dir.glob("*/*/manifest.json")):
         run_dir = manifest_path.parent
-        if not _has_complete_run_artifacts(run_dir):
+        if not _has_complete_run_artifacts(run_dir, require_test_artifacts=require_test_artifacts):
             continue
         try:
             manifest = json.loads(manifest_path.read_text())
@@ -196,8 +197,10 @@ def _manifest_signature(manifest: object) -> str | None:
     )
 
 
-def _has_complete_run_artifacts(run_dir: Path) -> bool:
-    required = ("manifest.json", "config.json", "weight.pt", "eval_metrics.json", "predictions.npz")
+def _has_complete_run_artifacts(run_dir: Path, *, require_test_artifacts: bool = True) -> bool:
+    required = ["manifest.json", "config.json", "weight.pt", "history.jsonl"]
+    if require_test_artifacts:
+        required.extend(["eval_metrics.json", "predictions.npz"])
     return all((run_dir / name).is_file() for name in required)
 
 
@@ -268,11 +271,20 @@ def run_command(command: list[str]) -> int:
         raise
 
 
-def run_task(task: BaselineTask, temp_config: Path, runs_dir: Path, runner: list[str], early_stopping: bool) -> int:
+def run_task(
+    task: BaselineTask,
+    temp_config: Path,
+    runs_dir: Path,
+    runner: list[str],
+    early_stopping: bool,
+    test_evaluation: bool = True,
+) -> int:
     output_root = runs_dir / task.model
     command = [*runner, "train", str(temp_config), str(task.dataset_path), "--output", str(output_root)]
     if early_stopping:
         command.append("--early-stopping")
+    if not test_evaluation:
+        command.append("--no-test-evaluation")
     print("Running:", " ".join(command), flush=True)
     return run_command(command)
 
@@ -291,7 +303,9 @@ def main() -> int:
     temp_dir = runs_dir / "baseline_sweep_configs"
     tasks = build_tasks(args.configs, args.datasets, args.seeds)
     progress = load_progress(state_path, len(tasks), args.restart)
-    progress["completed"] = {} if args.restart else discover_completed_tasks(tasks, runs_dir)
+    progress["completed"] = (
+        {} if args.restart else discover_completed_tasks(tasks, runs_dir, require_test_artifacts=not args.no_test_evaluation)
+    )
     completed = progress["completed"]
     remaining = [task for task in tasks if task.key not in completed]
 
@@ -326,7 +340,14 @@ def main() -> int:
 
         temp_config = prepare_temp_config(task.config_path, task.seed, temp_dir)
         started = time.perf_counter()
-        returncode = run_task(task, temp_config, runs_dir, args.runner, args.early_stopping)
+        returncode = run_task(
+            task,
+            temp_config,
+            runs_dir,
+            args.runner,
+            args.early_stopping,
+            test_evaluation=not args.no_test_evaluation,
+        )
         duration = time.perf_counter() - started
         finished_at = utc_now()
 

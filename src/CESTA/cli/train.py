@@ -33,7 +33,11 @@ def train(
         bool,
         typer.Option("--early-stopping/--no-early-stopping", help="Enable early stopping"),
     ] = False,
+    test_evaluation: Annotated[
+        bool,
+        typer.Option("--test-evaluation/--no-test-evaluation", help="Evaluate the locked checkpoint on test data"),
+    ] = True,
 ) -> None:
     """Train a fault diagnosis model."""
     config = TrainConfig.model_validate(load_config_file(config_file))
-    run_training(config=config, data=data, output=output, early_stopping=early_stopping)
+    run_training(config=config, data=data, output=output, early_stopping=early_stopping, test_evaluation=test_evaluation)

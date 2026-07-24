@@ -33,7 +33,13 @@ from CESTA.utils import (
 )
 
 
-def run_training(config: TrainConfig, data: Path, output: Path | None = None, early_stopping: bool = False) -> None:
+def run_training(
+    config: TrainConfig,
+    data: Path,
+    output: Path | None = None,
+    early_stopping: bool = False,
+    test_evaluation: bool = True,
+) -> None:
     logger.debug("TrainConfig: {}", config.model_dump(mode="json"))
 
     logger.info("Loading data from: {}", data)
@@ -128,7 +134,6 @@ def run_training(config: TrainConfig, data: Path, output: Path | None = None, ea
         edge_mask_val=prepared.edge_mask_val if prepared.has_val else None,
     )
     duration = time.perf_counter() - t0
-    ended_at = utc_now_iso()
 
     logger.info(
         "Training complete at epoch {} | best_val_loss={:.4f}",
@@ -137,7 +142,7 @@ def run_training(config: TrainConfig, data: Path, output: Path | None = None, ea
     )
     logger.info("Model saved to: {}", run_dir)
 
-    if prepared.has_test:
+    if test_evaluation and prepared.has_test:
         logger.info("--- Final Test Evaluation ---")
         weight_path = run_dir / "weight.pt"
         if weight_path.exists():
@@ -158,6 +163,7 @@ def run_training(config: TrainConfig, data: Path, output: Path | None = None, ea
             metadata=prepared.metadata,
             node_mask=prepared.node_mask_test,
             edge_mask=prepared.edge_mask_test,
+            split="test",
         )
         evaluator.log_results(eval_result)
 
@@ -168,12 +174,14 @@ def run_training(config: TrainConfig, data: Path, output: Path | None = None, ea
         )
         logger.info("Results saved to: {}", run_dir)
 
+    ended_at = utc_now_iso()
     manifest = RunManifest(
         run_id=run_id,
         kind="train",
         seed=config.seed,
         model=config.model,
         num_parameters=net.count_parameters(),
+        total_parameters=net.count_all_parameters(),
         git=git,
         env=env,
         dataset=dataset_info,

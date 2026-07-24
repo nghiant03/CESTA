@@ -67,8 +67,8 @@ To add a raw dataset, subclass `BaseDataset` under `datasets/raw/` and register 
 - Call `seed_everything(config.seed)` before model construction.
 - `Trainer` receives validation data explicitly and supports focal loss, aligned oversampling, callbacks, and composed auxiliary objectives.
 - Keep shared masked loss, decoding, and auxiliary objectives in `training/objectives.py`, not model-specific branches in the trainer.
-- `Evaluator` handles device placement, masked predictions, metrics, and communication aggregation.
-- `EvalResult.save()` writes classification artifacts and `communication_metrics.json` when available.
+- `Evaluator` handles device placement, masked predictions, metrics, split-aware communication aggregation, and validation-only checkpoint evaluation.
+- `EvalResult.save()` writes classification artifacts and `communication_metrics.json` when available. Validation evaluation must not overwrite test artifacts.
 - Energy accounting belongs in `evaluation/energy.py`, outside models. Count TX and RX for each active directed message using graph-aligned distances and serialize constants, units, distance source, shares, totals, and dense-reference reductions.
 
 Each training invocation creates a new, never-overwritten run:
@@ -90,7 +90,7 @@ runs/<model>/<run_id>/
 
 Request decisions must use receiver-local state, local uncertainty, and edge metadata only. They cannot inspect sender hidden states before communication. Aggregation uses receiver queries and received sender keys/values, softmax over the received set only, and zero graph context when none are received.
 
-The model may expose communication statistics, neighbor beliefs, boundary logits, CRF decoding, communication-conditioned correction, structured top-k requests, VOI objectives, and rule controls. Rule-control decisions use receiver-local scores and edge metadata, and their validation-tuned parameters must be persisted in communication artifacts. Keep transmitted-bit estimates aligned with the actual payload and preserve gradient-bearing communication ratios for training penalties. Evaluation aggregates per-edge requested/possible counts against canonical graph distances.
+The model may expose communication statistics, neighbor beliefs, boundary logits, CRF decoding, communication-conditioned correction, structured top-k requests, VOI objectives, and rule controls. Rule-control decisions use receiver-local scores and edge metadata, and their validation-tuned parameters must be persisted in communication artifacts. Random controls derive decisions from stable window, timestep, receiver, sender, and controller-seed identities. Freeze inactive learned-gate parameters in rule modes and persist active and total parameter counts. Keep transmitted-bit estimates aligned with the actual payload and preserve gradient-bearing communication ratios for training penalties. Evaluation aggregates per-edge requested/possible counts against canonical graph distances.
 
 ## Firmware
 
@@ -107,6 +107,10 @@ uv run cesta optimize --data data/canon/intel_lab --model lstm --n-trials 20 --e
 uv run python scripts/run_all_baselines.py --dry-run
 uv run python scripts/audit_decisive_comparison.py --spec config/benchmark/decisive-comparison.yaml --runs-root runs --output runs/decisive-comparison-audit --allow-incomplete
 uv run python scripts/summarize_decisive_comparison.py --runs-csv runs/decisive-comparison-audit/runs.csv --output runs/decisive-comparison-summary --comparison <variant> <locked-reference>
+uv run python scripts/generate_control_tuning.py --spec config/benchmark/control-tuning.yaml --output runs/control-tuning/generated
+uv run python scripts/derive_control_budgets.py --runs-csv <validation-runs.csv> --source-variant <variant> --output runs/control-tuning/control-budgets.yaml
+uv run python scripts/lock_control_policies.py --budgets <budgets.yaml> --validation-runs-csv <validation-runs.csv> --controller <control> <variants...> --output runs/control-tuning/control-lock.yaml
+uv run python scripts/audit_locked_controls.py --lock <control-lock.yaml> --test-runs-csv <test-runs.csv> --output runs/control-locked-audit
 ```
 
 The baseline runner reconciles completed cells from manifests and resolved configs. Use split-matched diagnosis configs for direct CESTA accuracy claims; legacy `80/10/10` runs are descriptive only. The benchmark auditor rejects missing, duplicate, inconsistent, or incomparable cells without selecting by test performance.

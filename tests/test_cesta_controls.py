@@ -35,6 +35,28 @@ class CESTAControlTest(unittest.TestCase):
         self.assertGreater(first_request.sum().item(), 0.0)
         self.assertLess(first_request.sum().item(), possible.sum().item())
 
+    def test_random_control_is_invariant_to_batch_partitioning(self) -> None:
+        model = self._model("random", control_request_ratio=0.5, control_seed=17)
+        hidden = torch.zeros((3, 4, 3, 2))
+        possible = model._possible_message_mask(hidden)
+        model._active_window_ids = torch.tensor([4, 8, 15])
+        complete = model._rule_request_mask(hidden, possible)
+
+        partitioned = []
+        for index in range(3):
+            model._active_window_ids = torch.tensor([4, 8, 15])[index : index + 1]
+            partitioned.append(model._rule_request_mask(hidden[index : index + 1], possible[index : index + 1]))
+
+        torch.testing.assert_close(complete, torch.cat(partitioned))
+
+    def test_rule_controls_exclude_learned_gate_parameters(self) -> None:
+        rule = self._model("entropy")
+        learned = self._model("gumbel_request")
+
+        self.assertFalse(any(parameter.requires_grad for parameter in rule.request_gate.parameters()))
+        self.assertTrue(all(parameter.requires_grad for parameter in learned.request_gate.parameters()))
+        self.assertLess(rule.count_parameters(), learned.count_parameters())
+
     def test_receiver_local_threshold_controls_apply_to_all_available_neighbors(self) -> None:
         hidden = torch.zeros((1, 2, 3, 2))
         entropy = torch.tensor([[[0.2, 0.7, 0.8], [0.9, 0.1, 0.4]]])

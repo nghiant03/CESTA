@@ -51,7 +51,7 @@ class CESTACommunicationMixin:
     control_entropy_weight: float
     control_margin_weight: float
     control_local_change_weight: float
-    _control_generators: dict[str, torch.Generator]
+    _active_window_ids: torch.Tensor | None
 
     def _dense_neighbor_context(
         self,
@@ -82,13 +82,7 @@ class CESTACommunicationMixin:
         possible_mask: torch.Tensor,
     ) -> torch.Tensor:
         if self.communication_mode == "random":
-            generator = self._random_control_generator(local_hidden.device)
-            random_values = torch.rand(
-                possible_mask.shape,
-                dtype=local_hidden.dtype,
-                device=local_hidden.device,
-                generator=generator,
-            )
+            random_values = self._stable_random_values(local_hidden, possible_mask)
             return (random_values < self.control_request_ratio).to(local_hidden.dtype) * possible_mask
         if self.communication_mode == "static_topk":
             return self._static_topk_request_mask(local_hidden, possible_mask)
@@ -112,14 +106,29 @@ class CESTACommunicationMixin:
             raise ValueError(f"Unsupported rule-based communication mode: {self.communication_mode}")
         return need.to(local_hidden.dtype).unsqueeze(-1) * possible_mask
 
-    def _random_control_generator(self, device: torch.device) -> torch.Generator:
-        key = str(device)
-        generator = self._control_generators.get(key)
-        if generator is None:
-            generator = torch.Generator(device=device)
-            generator.manual_seed(self.control_seed)
-            self._control_generators[key] = generator
-        return generator
+    def _stable_random_values(
+        self,
+        local_hidden: torch.Tensor,
+        possible_mask: torch.Tensor,
+    ) -> torch.Tensor:
+        B, T, N, _ = possible_mask.shape
+        if self._active_window_ids is None:
+            window_ids = torch.arange(B, dtype=torch.int64, device=local_hidden.device)
+        else:
+            window_ids = self._active_window_ids.to(device=local_hidden.device, dtype=torch.int64)
+        timestep = torch.arange(T, dtype=torch.int64, device=local_hidden.device)
+        receiver = torch.arange(N, dtype=torch.int64, device=local_hidden.device)
+        sender = torch.arange(N, dtype=torch.int64, device=local_hidden.device)
+        keys = (
+            window_ids.view(B, 1, 1, 1) * 73_856_093
+            + timestep.view(1, T, 1, 1) * 19_349_663
+            + receiver.view(1, 1, N, 1) * 83_492_791
+            + sender.view(1, 1, 1, N) * 2_654_435_761
+            + self.control_seed * 97_531
+        )
+        modulus = 2_147_483_647
+        hashed = torch.remainder(torch.remainder(keys, modulus) * 48_271 + 12_345, modulus)
+        return hashed.to(dtype=local_hidden.dtype) / float(modulus)
 
     def _static_topk_request_mask(
         self,

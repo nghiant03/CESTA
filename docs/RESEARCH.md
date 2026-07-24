@@ -69,11 +69,11 @@ Use seeds `12`, `42`, and `1242`. Compare only runs with matching features, wind
 - Dense learned message passing over every available directed edge.
 - Static top-k connectivity, random communication, and entropy-, margin-, and local-change-based controllers at matched budgets.
 
-Lock the primary temporal family without reading test metrics. Require all 12 dataset-and-seed cells, rank families by mean checkpoint validation macro-F1, then break exact ties by lower validation standard deviation, lower parameter count, and lexical model name. Tune controller thresholds and communication budgets on validation data only.
+Lock the primary temporal family without reading test metrics. Require all 12 dataset-and-seed cells, rank families by mean checkpoint validation macro-F1, then break exact ties by lower validation standard deviation, lower active parameter count, and lexical model name. Tune controller thresholds and communication budgets on validation data only. Match controls primarily by dataset-level mean TX+RX energy across seeds within the interval `[98%, 100%]` of the learned target. Among matched candidates select the highest validation macro-F1; otherwise report the nearest candidate below target as under-budget unmatched. Keep equal combined-controller weights fixed during the first threshold sweep.
 
 ### Metrics and uncertainty
 
-Report macro-F1, per-class F1, accuracy, confusion matrix, request ratio, requested edges, transmitted bits, TX energy, RX energy, total energy, dense-reference energy, parameter count, model size, latency, and peak memory where available.
+Report macro-F1, per-class F1, accuracy, confusion matrix, request ratio, requested edges, transmitted bits, TX energy, RX energy, total energy, dense-reference energy, active and total parameter counts, model size, latency, and peak memory where available.
 
 For each dataset-and-seed matched comparison, report all 12 differences, their mean and sample standard deviation, and a deterministic two-sided 95% paired bootstrap interval with 10,000 resamples and seed `20260723`. With three seeds per dataset, treat intervals as descriptive uncertainty rather than strong significance evidence.
 
@@ -165,9 +165,10 @@ Stop and investigate if a run is dirty, uses a different commit or dataset hash,
 
 ### P0: budget-matched controls
 
-- [ ] Derive target request and energy budgets from selected CESTA variants.
+- [ ] Derive target request and energy budgets from selected CESTA variants. The validation-only, content-hashed derivation tool is implemented; clean validation artifacts are still required.
 - [x] Implement random, static top-k, entropy, margin, local-change, and combined controls.
-- [ ] Tune on validation data only and compare locked policies on the macro-F1/TX+RX energy frontier.
+- [x] Implement predefined tuning-grid generation, validation-only evaluation and selection, content-hashed policy locking, and locked test-audit infrastructure.
+- [ ] Run validation tuning, freeze the resulting lock, and compare locked policies on the macro-F1/TX+RX energy frontier.
 
 ### P1: coverage and paper readiness
 

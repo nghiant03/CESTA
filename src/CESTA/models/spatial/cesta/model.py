@@ -158,7 +158,7 @@ class CESTAClassifier(CESTASequenceMixin, CESTACommunicationMixin, BaseModel):
         self.control_entropy_weight = control_entropy_weight
         self.control_margin_weight = control_margin_weight
         self.control_local_change_weight = control_local_change_weight
-        self._control_generators: dict[str, torch.Generator] = {}
+        self._active_window_ids: torch.Tensor | None = None
         self.encoder_output_size = hidden_size * (2 if bidirectional else 1)
         self.neighbor_belief_size = num_classes + 2
 
@@ -266,11 +266,28 @@ class CESTAClassifier(CESTASequenceMixin, CESTACommunicationMixin, BaseModel):
             torch.tensor(math.log(correction_scale_init / (1.0 - correction_scale_init)), dtype=torch.float32)
         )
         self.crf_transitions = nn.Parameter(torch.zeros(num_classes, num_classes))
+        self._freeze_inactive_parameters()
         self._last_communication_stats: CommunicationStats = (
             self._zero_communication_stats()
         )
         self._communication_loss: torch.Tensor | None = None
         self._gate_entropy: torch.Tensor | None = None
+
+    def _freeze_inactive_parameters(self) -> None:
+        inactive_modules: list[nn.Module] = []
+        if self.communication_mode != "gumbel_request":
+            inactive_modules.extend([self.request_gate, self.need_gate, self.neighbor_ranker])
+        if not self.use_boundary_head:
+            inactive_modules.append(self.boundary_head)
+        if not self.use_logit_correction:
+            inactive_modules.append(self.logit_correction)
+        for module in inactive_modules:
+            for parameter in module.parameters():
+                parameter.requires_grad = False
+        if not self.use_boundary_head:
+            self.crf_transitions.requires_grad = self.use_crf
+        if not self.use_logit_correction:
+            self.correction_logit.requires_grad = False
 
     @property
     def name(self) -> str:
@@ -329,7 +346,10 @@ class CESTAClassifier(CESTASequenceMixin, CESTACommunicationMixin, BaseModel):
         if isinstance(x, GraphWindowBatch):
             edge_index = x.edge_index
             edge_mask = x.edge_mask
+            self._active_window_ids = x.window_ids
             x = x.x
+        else:
+            self._active_window_ids = None
 
         if x.ndim == 4:
             batch, seq_len, _, _ = x.shape

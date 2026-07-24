@@ -14,6 +14,7 @@ class GraphWindowBatch:
     node_mask: torch.Tensor
     edge_index: torch.Tensor
     edge_mask: torch.Tensor
+    window_ids: torch.Tensor | None = None
 
 
 @dataclass

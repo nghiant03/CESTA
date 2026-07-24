@@ -36,8 +36,6 @@ def run_evaluation(model: Path, data: Path, config: EvaluateConfig, output: Path
     logger.info("Loading model from: {}", model)
     meta = load_checkpoint_metadata(model)
     model_name = str(meta.get("model_name", "lstm"))
-    model_config = meta.get("model_config", {})
-    assert isinstance(model_config, dict)
 
     train_cfg = meta.get("train_config")
     saved_features: list[str] | None = None
@@ -51,15 +49,22 @@ def run_evaluation(model: Path, data: Path, config: EvaluateConfig, output: Path
         resolved_data_config = DataConfig.model_validate(data_config)
     else:
         resolved_data_config = DataConfig()
+    requested_metadata = set(model_cls.required_metadata)
+    if isinstance(train_cfg, dict):
+        saved_model_kwargs = train_cfg.get("model_kwargs", {})
+        if isinstance(saved_model_kwargs, dict) and saved_model_kwargs.get("node_embedding_dim", 0):
+            requested_metadata.add("node_identity")
     prepared = dataset.prepare(
         window_config=resolved_data_config.window,
         split_config=resolved_data_config.split,
         features=saved_features,
-        required_metadata=model_cls.required_metadata,
+        required_metadata=requested_metadata,
     )
 
-    if not prepared.has_test:
-        logger.error("No test data available in dataset")
+    selected = prepared.val if config.split == "val" else prepared.test
+    has_split = prepared.has_val if config.split == "val" else prepared.has_test
+    if not has_split:
+        logger.error("No {} data available in dataset", config.split)
         raise typer.Exit(code=1)
 
     input_size = prepared.input_size
@@ -81,32 +86,33 @@ def run_evaluation(model: Path, data: Path, config: EvaluateConfig, output: Path
     logger.info("Model: {} ({:,} parameters)", net.name, net.count_parameters())
 
     evaluator = Evaluator(config=config)
-    logger.info("Evaluating with batch_size={}", config.batch_size)
+    logger.info("Evaluating {} with batch_size={}", config.split, config.batch_size)
 
     started_at = utc_now_iso()
     t0 = time.perf_counter()
     result = evaluator.evaluate(
         net,
-        prepared.X_test,
-        prepared.y_test,
+        selected.X,
+        selected.y,
         metadata=prepared.metadata,
-        node_mask=prepared.node_mask_test,
-        edge_mask=prepared.edge_mask_test,
+        node_mask=selected.node_mask,
+        edge_mask=selected.edge_mask,
+        split=config.split,
     )
     duration = time.perf_counter() - t0
     ended_at = utc_now_iso()
 
-    evaluator.log_results(result)
+    evaluator.log_results(result, split_name="Validation" if config.split == "val" else "Test")
 
+    git = collect_git_info()
+    seed = int(train_cfg.get("seed", 0)) if isinstance(train_cfg, dict) else 0
     if output is not None:
-        git = collect_git_info()
-        seed = int(train_cfg.get("seed", 0)) if isinstance(train_cfg, dict) else 0
         save_dir = create_run_dir(output, model=model_name, seed=seed, git=git)
-    else:
-        git = collect_git_info()
-        seed = int(train_cfg.get("seed", 0)) if isinstance(train_cfg, dict) else 0
+    elif config.split == "test":
         save_dir = model
         save_dir.mkdir(parents=True, exist_ok=True)
+    else:
+        save_dir = model / "validation"
 
     result.save(
         save_dir,
@@ -124,6 +130,7 @@ def run_evaluation(model: Path, data: Path, config: EvaluateConfig, output: Path
             seed=seed,
             model=model_name,
             num_parameters=net.count_parameters(),
+            total_parameters=net.count_all_parameters(),
             git=git,
             env=env,
             dataset=dataset_info,

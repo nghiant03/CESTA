@@ -55,6 +55,7 @@ class Evaluator:
         metadata: dict[str, object] | None = None,
         node_mask: NDArray[np.bool_] | None = None,
         edge_mask: NDArray[np.bool_] | None = None,
+        split: str = "test",
     ) -> EvalResult:
         """Evaluate the model on the given data.
 
@@ -73,7 +74,9 @@ class Evaluator:
         if criterion is None:
             criterion = nn.CrossEntropyLoss()
 
-        loader = self._make_loader(X, y, metadata=metadata, node_mask=node_mask, edge_mask=edge_mask)
+        if split not in {"val", "test"}:
+            raise ValueError("split must be 'val' or 'test'")
+        loader = self._make_loader(X, y, metadata=metadata, node_mask=node_mask, edge_mask=edge_mask, split=split)
 
         num_classes = self._infer_num_classes(model, X, metadata)
 
@@ -116,7 +119,7 @@ class Evaluator:
         y_pred = torch.cat(all_preds).numpy().astype(np.int32)
         y_prob = torch.cat(all_probs).numpy().astype(np.float32)
         communication_metrics = aggregate_communication_stats(
-            {"test": communication_stats},
+            {split: communication_stats},
             model,
             metadata=metadata,
         )
@@ -175,6 +178,7 @@ class Evaluator:
         metadata: dict[str, object] | None = None,
         node_mask: NDArray[np.bool_] | None = None,
         edge_mask: NDArray[np.bool_] | None = None,
+        split: str = "test",
     ) -> DataLoader[object]:
         """Create a DataLoader from numpy arrays."""
         return make_window_loader(
@@ -184,7 +188,7 @@ class Evaluator:
             metadata=metadata,
             node_mask=node_mask,
             edge_mask=edge_mask,
-            node_identity_split="test",
+            node_identity_split=split,
         )
 
     def _infer_num_classes(

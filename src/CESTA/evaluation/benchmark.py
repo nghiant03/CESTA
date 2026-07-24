@@ -29,7 +29,8 @@ class BenchmarkVariant:
     config_path: Path
     communication_mode: str
     model: str
-    expected_train_config: dict[str, Any] = field(repr=False)
+    datasets: tuple[str, ...] = ()
+    expected_train_config: dict[str, Any] = field(default_factory=dict, repr=False)
 
 
 @dataclass(frozen=True)
@@ -37,6 +38,7 @@ class BenchmarkSpec:
     datasets: tuple[BenchmarkDataset, ...]
     seeds: tuple[int, ...]
     variants: tuple[BenchmarkVariant, ...]
+    split: str = "test"
 
 
 @dataclass(frozen=True)
@@ -55,6 +57,7 @@ class BenchmarkRun:
     variant: str
     dataset: str
     seed: int
+    split: str
     run_id: str
     artifact_path: str
     model: str
@@ -82,6 +85,10 @@ class BenchmarkRun:
     dense_total_energy_j: float
     energy_reduction_j: float
     energy_reduction_ratio: float
+    num_parameters: int | None
+    total_parameters: int | None
+    communication_config_json: str
+    comparison_signature_json: str
 
 
 @dataclass
@@ -125,6 +132,9 @@ def load_benchmark_spec(path: str | Path, *, project_root: str | Path | None = N
     datasets_raw = _require_list(raw, "datasets")
     seeds_raw = _require_list(raw, "seeds")
     variants_raw = _require_list(raw, "variants")
+    split = raw.get("split", "test")
+    if split not in {"val", "test"}:
+        raise ValueError("split must be 'val' or 'test'")
 
     datasets: list[BenchmarkDataset] = []
     for item in datasets_raw:
@@ -140,6 +150,10 @@ def load_benchmark_spec(path: str | Path, *, project_root: str | Path | None = N
         name = _require_text(mapping, "name")
         config_path = _resolve_path(root, _require_text(mapping, "config"))
         communication_mode = _require_text(mapping, "communication_mode")
+        variant_datasets_raw = mapping.get("datasets", [])
+        if not isinstance(variant_datasets_raw, list) or any(not isinstance(value, str) or not value for value in variant_datasets_raw):
+            raise ValueError(f"Variant {name} datasets must be a list of names")
+        variant_datasets = tuple(variant_datasets_raw)
         config = TrainConfig.model_validate(load_config_file(config_path))
         if config.model_kwargs.get("communication_mode") != communication_mode:
             raise ValueError(f"Variant {name} communication_mode does not match {config_path}")
@@ -149,6 +163,7 @@ def load_benchmark_spec(path: str | Path, *, project_root: str | Path | None = N
                 config_path=config_path,
                 communication_mode=communication_mode,
                 model=config.model,
+                datasets=variant_datasets,
                 expected_train_config=_config_without_seed(config.model_dump(mode="json")),
             )
         )
@@ -156,7 +171,11 @@ def load_benchmark_spec(path: str | Path, *, project_root: str | Path | None = N
     _require_unique([dataset.name for dataset in datasets], "dataset names")
     _require_unique(list(seeds), "seeds")
     _require_unique([variant.name for variant in variants], "variant names")
-    return BenchmarkSpec(datasets=tuple(datasets), seeds=seeds, variants=tuple(variants))
+    dataset_names = {dataset.name for dataset in datasets}
+    unknown_datasets = sorted({name for variant in variants for name in variant.datasets if name not in dataset_names})
+    if unknown_datasets:
+        raise ValueError(f"Variants reference unknown datasets: {unknown_datasets}")
+    return BenchmarkSpec(datasets=tuple(datasets), seeds=seeds, variants=tuple(variants), split=split)
 
 
 def audit_benchmark(spec: BenchmarkSpec, runs_root: str | Path) -> BenchmarkAudit:
@@ -165,6 +184,7 @@ def audit_benchmark(spec: BenchmarkSpec, runs_root: str | Path) -> BenchmarkAudi
         BenchmarkCell(variant=variant.name, dataset=dataset.name, seed=seed)
         for variant in spec.variants
         for dataset in spec.datasets
+        if not variant.datasets or dataset.name in variant.datasets
         for seed in spec.seeds
     ]
     candidates: dict[BenchmarkCell, list[Path]] = {cell: [] for cell in expected_cells}
@@ -198,7 +218,7 @@ def audit_benchmark(spec: BenchmarkSpec, runs_root: str | Path) -> BenchmarkAudi
             continue
         variant = _variant_by_name(spec, cell.variant)
         try:
-            record, signature = _validate_run(paths[0], cell, variant)
+            record, signature = _validate_run(paths[0], cell, variant, split=spec.split)
             expected_signature = comparison_signatures.setdefault(cell.dataset, signature)
             if signature != expected_signature:
                 raise ValueError("radio, graph, payload, or dataset metadata differs from other compared runs")
@@ -236,6 +256,11 @@ def _match_manifest(manifest: dict[str, Any], spec: BenchmarkSpec) -> BenchmarkC
     if not isinstance(train_config, dict):
         return None
     actual_config = _config_without_seed(train_config)
+    eval_config = manifest.get("eval_config")
+    if spec.split == "val" and (not isinstance(eval_config, dict) or eval_config.get("split") != "val"):
+        return None
+    if spec.split == "test" and isinstance(eval_config, dict) and eval_config.get("split", "test") != "test":
+        return None
     variants = [variant for variant in spec.variants if variant.model == manifest.get("model") and variant.expected_train_config == actual_config]
     if len(variants) != 1:
         return None
@@ -246,13 +271,15 @@ def _match_manifest(manifest: dict[str, Any], spec: BenchmarkSpec) -> BenchmarkC
     if not isinstance(dataset_path, str):
         return None
     datasets = [dataset for dataset in spec.datasets if Path(dataset_path).name == dataset.path.name and dataset.name == dataset.path.name]
+    if len(datasets) == 1:
+        variants = [variant for variant in variants if not variant.datasets or datasets[0].name in variant.datasets]
     seed = manifest.get("seed")
     if len(datasets) != 1 or not isinstance(seed, int) or isinstance(seed, bool) or seed not in spec.seeds:
         return None
     return BenchmarkCell(variant=variants[0].name, dataset=datasets[0].name, seed=seed)
 
 
-def _validate_run(path: Path, cell: BenchmarkCell, variant: BenchmarkVariant) -> tuple[BenchmarkRun, dict[str, Any]]:
+def _validate_run(path: Path, cell: BenchmarkCell, variant: BenchmarkVariant, *, split: str) -> tuple[BenchmarkRun, dict[str, Any]]:
     manifest = _load_json_mapping(path / "manifest.json")
     metrics = _load_json_mapping(path / "eval_metrics.json")
     communication = _load_json_mapping(path / "communication_metrics.json")
@@ -284,17 +311,20 @@ def _validate_run(path: Path, cell: BenchmarkCell, variant: BenchmarkVariant) ->
     mode = _require_text(communication_config, "communication_mode")
     if mode != variant.communication_mode:
         raise ValueError(f"communication mode {mode!r} does not match expected {variant.communication_mode!r}")
-    split = _require_mapping(_require_mapping(communication.get("splits"), "communication.splits").get("test"), "communication.splits.test")
+    split_metrics = _require_mapping(
+        _require_mapping(communication.get("splits"), "communication.splits").get(split),
+        f"communication.splits.{split}",
+    )
     graph = _require_mapping(communication.get("graph"), "communication.graph")
     _require_graph_metadata(graph)
 
-    requested = _finite_nonnegative(split.get("requested_edge_count"), "requested_edge_count")
-    possible = _finite_nonnegative(split.get("possible_edge_count"), "possible_edge_count")
-    transmitted_bits = _finite_nonnegative(split.get("transmitted_bits_estimate"), "transmitted_bits_estimate")
-    bits_per_message = _finite_nonnegative(split.get("bits_per_message"), "bits_per_message")
-    request_ratio = _finite_nonnegative(split.get("active_request_ratio"), "active_request_ratio")
-    requested_by_edge = _number_list(split.get("requested_edge_counts"), "requested_edge_counts")
-    possible_by_edge = _number_list(split.get("possible_edge_counts"), "possible_edge_counts")
+    requested = _finite_nonnegative(split_metrics.get("requested_edge_count"), "requested_edge_count")
+    possible = _finite_nonnegative(split_metrics.get("possible_edge_count"), "possible_edge_count")
+    transmitted_bits = _finite_nonnegative(split_metrics.get("transmitted_bits_estimate"), "transmitted_bits_estimate")
+    bits_per_message = _finite_nonnegative(split_metrics.get("bits_per_message"), "bits_per_message")
+    request_ratio = _finite_nonnegative(split_metrics.get("active_request_ratio"), "active_request_ratio")
+    requested_by_edge = _number_list(split_metrics.get("requested_edge_counts"), "requested_edge_counts")
+    possible_by_edge = _number_list(split_metrics.get("possible_edge_counts"), "possible_edge_counts")
     if len(requested_by_edge) != len(possible_by_edge):
         raise ValueError("requested and possible per-edge counts have different lengths")
     paired_edge_counts = zip(requested_by_edge, possible_by_edge, strict=True)
@@ -308,7 +338,7 @@ def _validate_run(path: Path, cell: BenchmarkCell, variant: BenchmarkVariant) ->
     _require_close(request_ratio, expected_ratio, "active request ratio")
     _require_close(transmitted_bits, requested * bits_per_message, "transmitted bits")
 
-    energy = _require_mapping(split.get("energy"), "energy")
+    energy = _require_mapping(split_metrics.get("energy"), "energy")
     constants = _require_mapping(energy.get("constants"), "energy.constants")
     units = _require_mapping(energy.get("units"), "energy.units")
     distance = _require_mapping(energy.get("distance"), "energy.distance")
@@ -350,6 +380,7 @@ def _validate_run(path: Path, cell: BenchmarkCell, variant: BenchmarkVariant) ->
         variant=cell.variant,
         dataset=cell.dataset,
         seed=cell.seed,
+        split=split,
         run_id=run_id,
         artifact_path=str(path),
         model=variant.model,
@@ -377,6 +408,10 @@ def _validate_run(path: Path, cell: BenchmarkCell, variant: BenchmarkVariant) ->
         dense_total_energy_j=dense_energy["total_energy_j"],
         energy_reduction_j=energy_reduction_j,
         energy_reduction_ratio=energy_reduction_ratio,
+        num_parameters=_optional_nonnegative_integer(manifest.get("num_parameters"), "num_parameters"),
+        total_parameters=_optional_nonnegative_integer(manifest.get("total_parameters"), "total_parameters"),
+        communication_config_json=json.dumps(communication_config, sort_keys=True, separators=(",", ":")),
+        comparison_signature_json=json.dumps(signature, sort_keys=True, separators=(",", ":")),
     )
     return record, signature
 
@@ -444,6 +479,15 @@ def _require_integer(value: object, name: str) -> int:
     if not isinstance(value, int) or isinstance(value, bool):
         raise ValueError(f"{name} must be an integer")
     return value
+
+
+def _optional_nonnegative_integer(value: object, name: str) -> int | None:
+    if value is None:
+        return None
+    integer = _require_integer(value, name)
+    if integer < 0:
+        raise ValueError(f"{name} must be non-negative")
+    return integer
 
 
 def _require_unique(values: list[object], name: str) -> None:

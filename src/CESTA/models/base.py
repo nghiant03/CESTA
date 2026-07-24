@@ -58,6 +58,10 @@ class BaseModel(nn.Module, ABC):
         ...
 
     def count_parameters(self) -> int:
-        """Count total trainable parameters."""
+        """Count active trainable parameters."""
         return sum(p.numel() for p in self.parameters() if p.requires_grad)
+
+    def count_all_parameters(self) -> int:
+        """Count all model parameters, including inactive parameters."""
+        return sum(p.numel() for p in self.parameters())
 

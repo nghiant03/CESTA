@@ -1,0 +1,35 @@
+datasets:
+  - name: Intel_fault05
+    path: data/datasets/Intel_fault05
+  - name: Intel_fault10
+    path: data/datasets/Intel_fault10
+  - name: Intel_fault15
+    path: data/datasets/Intel_fault15
+  - name: Intel_fault20
+    path: data/datasets/Intel_fault20
+seeds: [12, 42, 1242]
+controllers:
+  random:
+    template: config/model/diagnosis/controls/cesta_random.yaml
+    parameter: control_request_ratio
+    values: [0.1, 0.2, 0.3, 0.4, 0.5, 0.6]
+  static_topk:
+    template: config/model/diagnosis/controls/cesta_static_topk.yaml
+    parameter: control_static_topk
+    values: [1, 2, 3, 4]
+  entropy:
+    template: config/model/diagnosis/controls/cesta_entropy.yaml
+    parameter: control_entropy_threshold
+    values: [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
+  margin:
+    template: config/model/diagnosis/controls/cesta_margin.yaml
+    parameter: control_margin_threshold
+    values: [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
+  local_change:
+    template: config/model/diagnosis/controls/cesta_local_change.yaml
+    parameter: control_local_change_threshold
+    values: [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
+  combined:
+    template: config/model/diagnosis/controls/cesta_combined.yaml
+    parameter: control_combined_threshold
+    values: [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]

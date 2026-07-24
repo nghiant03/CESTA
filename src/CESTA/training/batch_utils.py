@@ -67,6 +67,7 @@ def infer_num_classes(
             node_mask=torch.ones(1, X.shape[1], X.shape[2], dtype=torch.bool, device=device),
             edge_index=torch.tensor(graph_meta.edge_index, dtype=torch.long, device=device),
             edge_mask=torch.ones(1, X.shape[1], graph_meta.edge_index.shape[1], dtype=torch.bool, device=device),
+            window_ids=torch.zeros(1, dtype=torch.long, device=device),
         )
         return int(model(sample).size(-1))
     if isinstance((metadata or {}).get("node_identity"), dict):
@@ -90,6 +91,7 @@ def prepare_batch(
             node_mask=batch.node_mask.to(device),
             edge_index=batch.edge_index.to(device),
             edge_mask=batch.edge_mask.to(device),
+            window_ids=batch.window_ids.to(device) if batch.window_ids is not None else None,
         )
         return graph_batch, graph_batch.y, graph_batch.node_mask, graph_batch.x.size(0)
     if isinstance(batch, TemporalWindowBatch):

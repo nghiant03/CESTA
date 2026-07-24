@@ -35,16 +35,22 @@ class GraphWindowDataset(Dataset[GraphWindowBatch]):
             node_mask=self.node_mask[index],
             edge_index=self.edge_index,
             edge_mask=self.edge_mask[index],
+            window_ids=torch.tensor(index, dtype=torch.long),
         )
 
 
 def collate_graph_batch(items: list[GraphWindowBatch]) -> GraphWindowBatch:
+    window_ids = None
+    if items[0].window_ids is not None:
+        ids = [item.window_ids for item in items if item.window_ids is not None]
+        window_ids = torch.stack(ids)
     return GraphWindowBatch(
         x=torch.stack([item.x for item in items]),
         y=torch.stack([item.y for item in items]),
         node_mask=torch.stack([item.node_mask for item in items]),
         edge_index=items[0].edge_index,
         edge_mask=torch.stack([item.edge_mask for item in items]),
+        window_ids=window_ids,
     )
 
 

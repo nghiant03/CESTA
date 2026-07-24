@@ -149,6 +149,25 @@ class BenchmarkAuditTest(unittest.TestCase):
 
         self.assertEqual([run.seed for run in audit.runs], [42, 12])
 
+    def test_validation_spec_reads_only_validation_artifacts(self) -> None:
+        self._write_config("gumbel_request")
+        self._write_spec("gumbel_request")
+        spec = yaml.safe_load(self.spec_path.read_text())
+        spec["split"] = "val"
+        self.spec_path.write_text(yaml.safe_dump(spec, sort_keys=False))
+        path = self._write_run("run-a", mode="gumbel_request", requested=(2.0, 1.0), possible=(2.0, 2.0))
+        manifest = self._read_json(path / "manifest.json")
+        manifest["eval_config"] = {"batch_size": 64, "split": "val"}
+        self._write_json(path / "manifest.json", manifest)
+        communication = self._read_json(path / "communication_metrics.json")
+        communication["splits"]["val"] = communication["splits"].pop("test")
+        self._write_json(path / "communication_metrics.json", communication)
+
+        audit = self._audit()
+
+        self.assertTrue(audit.complete)
+        self.assertEqual(audit.runs[0].split, "val")
+
     def _audit(self):
         spec = load_benchmark_spec(self.spec_path, project_root=self.root)
         return audit_benchmark(spec, self.runs_root)

@@ -68,6 +68,15 @@ class BaselineCompletionDiscoveryTest(unittest.TestCase):
 
         self.assertEqual(completed, {})
 
+    def test_checkpoint_only_completion_does_not_require_test_artifacts(self) -> None:
+        run_dir = self._write_run("run-a")
+        (run_dir / "eval_metrics.json").unlink()
+        (run_dir / "predictions.npz").unlink()
+
+        completed = SWEEP.discover_completed_tasks([self.task], self.runs_dir, require_test_artifacts=False)
+
+        self.assertEqual(list(completed), [self.task.key])
+
     def test_ignores_different_resolved_config(self) -> None:
         self._write_run("run-a", train_updates={"learning_rate": 0.5})
 
@@ -120,7 +129,7 @@ class BaselineCompletionDiscoveryTest(unittest.TestCase):
             "timing": {"ended_at": "2026-07-23T00:00:00Z"},
         }
         (run_dir / "manifest.json").write_text(json.dumps(manifest))
-        for name in ("config.json", "weight.pt", "eval_metrics.json", "predictions.npz"):
+        for name in ("config.json", "weight.pt", "history.jsonl", "eval_metrics.json", "predictions.npz"):
             (run_dir / name).write_text("")
         return run_dir
 

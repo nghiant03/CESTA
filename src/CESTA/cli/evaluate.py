@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Literal
 
 import typer
 
@@ -32,7 +32,11 @@ def evaluate(
             help="Evaluation batch size",
         ),
     ] = 64,
+    split: Annotated[
+        Literal["val", "test"],
+        typer.Option("--split", help="Canonical split to evaluate"),
+    ] = "test",
 ) -> None:
-    """Evaluate a trained model on test data."""
-    config = EvaluateConfig(batch_size=batch_size)
+    """Evaluate a trained model on validation or test data."""
+    config = EvaluateConfig(batch_size=batch_size, split=split)
     run_evaluation(model=model, data=data, output=output, config=config)

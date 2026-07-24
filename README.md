@@ -26,8 +26,9 @@ uv run cesta transform intel_lab data/raw/Intel/data.txt data/canon/intel_lab \
 uv run cesta train config/model/gru.yaml data/canon/intel_lab
 uv run cesta train config/model/cesta.yaml data/canon/intel_lab
 
-# Evaluate a run
+# Evaluate a run, or create validation-only tuning artifacts
 uv run cesta evaluate --model runs/cesta/<run_id> --data data/canon/intel_lab
+uv run cesta evaluate --model runs/cesta/<run_id> --data data/canon/intel_lab --split val --output runs/control-validation
 ```
 
 Training is config-file-first. Diagnosis and benchmark configurations live under `config/model/diagnosis/`; use `uv run cesta <command> --help` for all command options.
@@ -71,6 +72,32 @@ uv run python scripts/summarize_decisive_comparison.py \
   --output runs/decisive-comparison-summary \
   --comparison <variant> <locked-reference>
 ```
+
+Budget-matched controls use validation artifacts only until policies are locked:
+
+```bash
+uv run python scripts/generate_control_tuning.py \
+  --spec config/benchmark/control-tuning.yaml \
+  --output runs/control-tuning/generated
+
+uv run python scripts/derive_control_budgets.py \
+  --runs-csv runs/cesta-validation-audit/runs.csv \
+  --source-variant <learned-variant> \
+  --output runs/control-tuning/control-budgets.yaml
+
+uv run python scripts/lock_control_policies.py \
+  --budgets runs/control-tuning/control-budgets.yaml \
+  --validation-runs-csv runs/control-validation-audit/runs.csv \
+  --controller entropy <candidate-variants> \
+  --output runs/control-tuning/control-lock.yaml
+
+uv run python scripts/audit_locked_controls.py \
+  --lock runs/control-tuning/control-lock.yaml \
+  --test-runs-csv runs/control-test-audit/runs.csv \
+  --output runs/control-locked-audit
+```
+
+Use `cesta train --no-test-evaluation` while generating tuning checkpoints. Validation evaluation defaults to a checkpoint-local `validation/` directory when no output is supplied, preventing test-artifact replacement. Budget and lock files are content-hashed; the scripts reject test records during derivation and selection.
 
 ## Layout
 

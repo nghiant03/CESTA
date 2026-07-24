@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -213,11 +213,13 @@ class EvaluateConfig(BaseModel):
 
     Attributes:
         batch_size: Evaluation batch size.
+        split: Canonical split to evaluate.
     """
 
     model_config = ConfigDict(frozen=True)
 
     batch_size: int = Field(default=64, ge=1)
+    split: Literal["val", "test"] = "test"
 
 class OptimizeConfig(BaseModel):
     """Configuration for hyperparameter optimization with Optuna.
