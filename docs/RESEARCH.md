@@ -142,7 +142,6 @@ These historical values guided configurations but must not be treated as paper c
 
 - [x] Complete and audit the 48-cell dense/selective CESTA matrix.
 - [x] Export classification, request, and TX+RX energy records and paired summaries.
-- [ ] Resolve untracked notebook work and start the definitive rerun from a clean worktree.
 - [ ] Run all eight temporal families over four datasets and three seeds, yielding 96 unique cells from one commit.
 - [ ] Use validation macro-F1 checkpointing, early stopping with patience 10 and minimum improvement `1e-4`, and no post-test configuration changes.
 - [ ] Persist the validation-only family ranking before inspecting temporal test comparisons.
@@ -167,7 +166,7 @@ Stop and investigate if a run is dirty, uses a different commit or dataset hash,
 ### P0: budget-matched controls
 
 - [ ] Derive target request and energy budgets from selected CESTA variants.
-- [ ] Implement random, static top-k, entropy, margin, local-change, and combined controls.
+- [x] Implement random, static top-k, entropy, margin, local-change, and combined controls.
 - [ ] Tune on validation data only and compare locked policies on the macro-F1/TX+RX energy frontier.
 
 ### P1: coverage and paper readiness

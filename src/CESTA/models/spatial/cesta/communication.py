@@ -40,6 +40,18 @@ class CESTACommunicationMixin:
     use_neighbor_belief: bool
     use_communication_conditioned_correction: bool
     structured_request_topk: int
+    communication_mode: Any
+    control_request_ratio: float
+    control_seed: int
+    control_static_topk: int
+    control_entropy_threshold: float
+    control_margin_threshold: float
+    control_local_change_threshold: float
+    control_combined_threshold: float
+    control_entropy_weight: float
+    control_margin_weight: float
+    control_local_change_weight: float
+    _control_generators: dict[str, torch.Generator]
 
     def _dense_neighbor_context(
         self,
@@ -51,6 +63,92 @@ class CESTACommunicationMixin:
             local_hidden, edge_index=edge_index, edge_mask=edge_mask
         )
         return self._gat_aggregate(local_hidden, possible_mask), possible_mask
+
+    def _rule_neighbor_context(
+        self,
+        local_hidden: torch.Tensor,
+        edge_index: torch.Tensor | None = None,
+        edge_mask: torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        possible_mask = self._possible_message_mask(
+            local_hidden, edge_index=edge_index, edge_mask=edge_mask
+        )
+        request_mask = self._rule_request_mask(local_hidden, possible_mask)
+        return self._gat_aggregate(local_hidden, request_mask), request_mask, possible_mask
+
+    def _rule_request_mask(
+        self,
+        local_hidden: torch.Tensor,
+        possible_mask: torch.Tensor,
+    ) -> torch.Tensor:
+        if self.communication_mode == "random":
+            generator = self._random_control_generator(local_hidden.device)
+            random_values = torch.rand(
+                possible_mask.shape,
+                dtype=local_hidden.dtype,
+                device=local_hidden.device,
+                generator=generator,
+            )
+            return (random_values < self.control_request_ratio).to(local_hidden.dtype) * possible_mask
+        if self.communication_mode == "static_topk":
+            return self._static_topk_request_mask(local_hidden, possible_mask)
+
+        entropy, margin, local_change = self._receiver_control_scores(local_hidden)
+        if self.communication_mode == "entropy":
+            need = entropy >= self.control_entropy_threshold
+        elif self.communication_mode == "margin":
+            need = margin <= self.control_margin_threshold
+        elif self.communication_mode == "local_change":
+            need = local_change >= self.control_local_change_threshold
+        elif self.communication_mode == "combined":
+            weight_sum = self.control_entropy_weight + self.control_margin_weight + self.control_local_change_weight
+            combined = (
+                self.control_entropy_weight * entropy
+                + self.control_margin_weight * (1.0 - margin)
+                + self.control_local_change_weight * local_change
+            ) / weight_sum
+            need = combined >= self.control_combined_threshold
+        else:
+            raise ValueError(f"Unsupported rule-based communication mode: {self.communication_mode}")
+        return need.to(local_hidden.dtype).unsqueeze(-1) * possible_mask
+
+    def _random_control_generator(self, device: torch.device) -> torch.Generator:
+        key = str(device)
+        generator = self._control_generators.get(key)
+        if generator is None:
+            generator = torch.Generator(device=device)
+            generator.manual_seed(self.control_seed)
+            self._control_generators[key] = generator
+        return generator
+
+    def _static_topk_request_mask(
+        self,
+        local_hidden: torch.Tensor,
+        possible_mask: torch.Tensor,
+    ) -> torch.Tensor:
+        B, T, N, _ = local_hidden.shape
+        edge_prob = cast(torch.Tensor, self.edge_prob).to(device=local_hidden.device, dtype=local_hidden.dtype)
+        scores = edge_prob.view(1, 1, N, N).expand(B, T, N, N)
+        scores = scores.masked_fill(possible_mask == 0, float("-inf"))
+        indices = scores.topk(k=min(self.control_static_topk, N), dim=-1).indices
+        request_mask = torch.zeros_like(possible_mask)
+        request_mask.scatter_(-1, indices, 1.0)
+        return request_mask * possible_mask
+
+    def _receiver_control_scores(
+        self,
+        local_hidden: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        local_belief = self._belief_features(self.classifier(local_hidden))
+        entropy = local_belief[..., self.num_classes]
+        if self.num_classes > 1:
+            entropy = entropy / torch.log(torch.tensor(float(self.num_classes), device=local_hidden.device, dtype=local_hidden.dtype))
+        margin = local_belief[..., self.num_classes + 1]
+        change = torch.zeros_like(entropy)
+        if local_hidden.shape[1] > 1:
+            delta = torch.linalg.vector_norm(local_hidden[:, 1:] - local_hidden[:, :-1], dim=-1)
+            change[:, 1:] = delta / (1.0 + delta)
+        return entropy, margin, change
 
     def _gumbel_neighbor_context(
         self,

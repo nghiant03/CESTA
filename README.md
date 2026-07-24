@@ -37,7 +37,7 @@ Training is config-file-first. Diagnosis and benchmark configurations live under
 - Markov injection of `SPIKE`, `DRIFT`, and `STUCK` sensor faults.
 - Temporal models: CNN1D, LSTM, GRU, Transformer, Autoformer, Informer, PatchTST, and ModernTCN.
 - Spatial models: dynamic ST-GCN and CESTA.
-- CESTA modes: no communication, dense communication, and receiver-side Gumbel request gating.
+- CESTA modes: no communication, dense communication, receiver-side Gumbel request gating, and random, static top-k, entropy, margin, local-change, or combined rule-based controls.
 - Canonical graph datasets with node masks, dynamic edge masks, node positions, and edge distances.
 - Classification, communication, and theoretical TX+RX radio-energy metrics.
 - Reproducible manifests, configs, checkpoints, histories, predictions, and Optuna searches.
@@ -87,6 +87,7 @@ src/CESTA/
 └── optimization/    # Optuna search
 
 config/              # Data, model, diagnosis, and benchmark configs
+config/model/diagnosis/controls/  # Rule-control templates for validation tuning
 docs/RESEARCH.md     # Research aim, protocol, evidence, and work plan
 firmware/             # ESP32-S3 firmware and deployment notes
 notebooks/            # Analysis notebooks

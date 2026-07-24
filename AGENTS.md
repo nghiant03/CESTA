@@ -86,11 +86,11 @@ runs/<model>/<run_id>/
 
 ## CESTA model
 
-`CESTAClassifier` is under `models/spatial/cesta/` and accepts graph-aligned input `(batch, window, nodes * features)`. Modes are `none`, `dense`, and `gumbel_request`.
+`CESTAClassifier` is under `models/spatial/cesta/` and accepts graph-aligned input `(batch, window, nodes * features)`. Modes are `none`, `dense`, `gumbel_request`, `random`, `static_topk`, `entropy`, `margin`, `local_change`, and `combined`.
 
 Request decisions must use receiver-local state, local uncertainty, and edge metadata only. They cannot inspect sender hidden states before communication. Aggregation uses receiver queries and received sender keys/values, softmax over the received set only, and zero graph context when none are received.
 
-The model may expose communication statistics, neighbor beliefs, boundary logits, CRF decoding, communication-conditioned correction, structured top-k requests, and VOI objectives. Keep transmitted-bit estimates aligned with the actual payload and preserve gradient-bearing communication ratios for training penalties. Evaluation aggregates per-edge requested/possible counts against canonical graph distances.
+The model may expose communication statistics, neighbor beliefs, boundary logits, CRF decoding, communication-conditioned correction, structured top-k requests, VOI objectives, and rule controls. Rule-control decisions use receiver-local scores and edge metadata, and their validation-tuned parameters must be persisted in communication artifacts. Keep transmitted-bit estimates aligned with the actual payload and preserve gradient-bearing communication ratios for training penalties. Evaluation aggregates per-edge requested/possible counts against canonical graph distances.
 
 ## Firmware
 

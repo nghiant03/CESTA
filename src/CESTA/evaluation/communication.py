@@ -21,16 +21,32 @@ def collect_model_communication_config(model: BaseModel) -> dict[str, Any] | Non
         return None
     message_size = _model_message_size(model)
     precision_bits = config.get("precision_bits")
-    return {
-        "communication_mode": config.get("communication_mode"),
-        "hidden_size": config.get("hidden_size"),
-        "gate_hidden_size": config.get("gate_hidden_size"),
-        "gumbel_temperature": config.get("gumbel_temperature"),
-        "precision_bits": precision_bits,
-        "message_size": message_size,
-        "bits_per_message": message_size * int(precision_bits) if isinstance(precision_bits, int) and message_size is not None else None,
-        "graph_edge_count": config.get("graph_edge_count", _graph_edge_count(config)),
-    }
+    keys = (
+        "communication_mode",
+        "hidden_size",
+        "gate_hidden_size",
+        "gumbel_temperature",
+        "precision_bits",
+        "control_request_ratio",
+        "control_seed",
+        "control_static_topk",
+        "control_entropy_threshold",
+        "control_margin_threshold",
+        "control_local_change_threshold",
+        "control_combined_threshold",
+        "control_entropy_weight",
+        "control_margin_weight",
+        "control_local_change_weight",
+    )
+    payload = {key: config.get(key) for key in keys}
+    payload.update(
+        {
+            "message_size": message_size,
+            "bits_per_message": message_size * int(precision_bits) if isinstance(precision_bits, int) and message_size is not None else None,
+            "graph_edge_count": config.get("graph_edge_count", _graph_edge_count(config)),
+        }
+    )
+    return payload
 
 
 def normalize_communication_stats(stats: dict[str, object]) -> dict[str, Any]:
