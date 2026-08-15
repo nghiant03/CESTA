@@ -82,7 +82,11 @@ def load_checkpoint_weights(model: ModelT, path: str | Path, *, map_location: ob
     load_kwargs: dict[str, Any] = {"weights_only": True}
     if map_location is not None:
         load_kwargs["map_location"] = map_location
-    model.load_state_dict(torch.load(checkpoint_weight_path(path), **load_kwargs))
+    state_dict: dict[str, Any] = torch.load(checkpoint_weight_path(path), **load_kwargs)
+    model_state = model.state_dict()
+    if "edge_distance_m" in state_dict and isinstance(model_state, dict) and "edge_distance_m" not in model_state:
+        state_dict.pop("edge_distance_m")
+    model.load_state_dict(state_dict)
     return model
 
 

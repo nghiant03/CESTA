@@ -23,6 +23,7 @@ class EvalResult:
     y_true: NDArray[np.int32] = field(default_factory=lambda: np.empty(0, dtype=np.int32))
     y_pred: NDArray[np.int32] = field(default_factory=lambda: np.empty(0, dtype=np.int32))
     y_prob: NDArray[np.float32] = field(default_factory=lambda: np.empty((0, 0), dtype=np.float32))
+    y_logits: NDArray[np.float32] = field(default_factory=lambda: np.empty((0, 0), dtype=np.float32))
     communication_metrics: dict[str, Any] | None = None
 
     def save(
@@ -68,6 +69,7 @@ class EvalResult:
             y_true=self.y_true.astype(np.int32),
             y_pred=self.y_pred.astype(np.int32),
             y_prob=self.y_prob.astype(np.float32),
+            y_logits=self.y_logits.astype(np.float32),
         )
 
         if self.communication_metrics is not None:
@@ -91,10 +93,12 @@ class EvalResult:
             y_true = preds["y_true"].astype(np.int32)
             y_pred = preds["y_pred"].astype(np.int32)
             y_prob = preds["y_prob"].astype(np.float32)
+            y_logits = preds["y_logits"].astype(np.float32) if "y_logits" in preds else np.empty((0, 0), dtype=np.float32)
         else:
             y_true = np.empty(0, dtype=np.int32)
             y_pred = np.empty(0, dtype=np.int32)
             y_prob = np.empty((0, 0), dtype=np.float32)
+            y_logits = np.empty((0, 0), dtype=np.float32)
 
         communication_path = directory / "communication_metrics.json"
         communication_metrics = json.loads(communication_path.read_text()) if communication_path.exists() else None
@@ -112,5 +116,6 @@ class EvalResult:
             y_true=y_true,
             y_pred=y_pred,
             y_prob=y_prob,
+            y_logits=y_logits,
             communication_metrics=communication_metrics,
         )

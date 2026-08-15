@@ -32,6 +32,24 @@ class RadioEnergyConfig:
         }
 
 
+def message_energy_j(
+    edge_distance_m: Sequence[float],
+    bits_per_message: float,
+    config: RadioEnergyConfig | None = None,
+) -> NDArray[np.float64]:
+    constants = config or RadioEnergyConfig()
+    distances = _as_nonnegative_array(edge_distance_m, "edge_distance_m")
+    if bits_per_message < 0.0:
+        raise ValueError("bits_per_message must be non-negative")
+    free_space = distances < constants.crossover_distance_m
+    amplifier_j_per_bit = np.where(
+        free_space,
+        constants.free_space_j_per_bit_m2 * np.square(distances),
+        constants.multipath_j_per_bit_m4 * np.power(distances, 4),
+    )
+    return bits_per_message * (2.0 * constants.electronics_j_per_bit + amplifier_j_per_bit)
+
+
 def compute_radio_energy_metrics(
     *,
     requested_edge_counts: Sequence[float],

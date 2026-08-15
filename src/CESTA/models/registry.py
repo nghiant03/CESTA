@@ -130,6 +130,7 @@ def _extract_metadata_kwargs(
             kwargs["num_nodes"] = graph_meta.num_nodes
             kwargs["edge_index"] = graph_meta.edge_index.tolist()
             kwargs["edge_prob"] = graph_meta.edge_prob.tolist()
+            kwargs["edge_distance_m"] = graph_meta.edge_distance_m.tolist()
 
     node_identity = metadata.get("node_identity")
     if "node_identity" in required and isinstance(node_identity, dict):

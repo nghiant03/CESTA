@@ -86,6 +86,7 @@ class Evaluator:
         all_preds: list[torch.Tensor] = []
         all_targets: list[torch.Tensor] = []
         all_probs: list[torch.Tensor] = []
+        all_logits: list[torch.Tensor] = []
         communication_stats: list[dict[str, Any]] = []
 
         for batch in loader:
@@ -100,15 +101,15 @@ class Evaluator:
             total_loss += loss.item() * batch_size
             preds = decode_predictions(model, logits, batch_node_mask)
             probs = torch.softmax(logits, dim=-1)
-            valid_preds, valid_targets, valid_probs = valid_outputs(
-                preds, y_batch, probs, batch_node_mask
-            )
+            valid_preds, valid_targets, valid_probs = valid_outputs(preds, y_batch, probs, batch_node_mask)
+            _, _, valid_logits = valid_outputs(preds, y_batch, logits, batch_node_mask)
             correct += (valid_preds == valid_targets).sum().item()
             total += valid_targets.numel()
 
             all_preds.append(valid_preds.detach().cpu())
             all_targets.append(valid_targets.detach().cpu())
             all_probs.append(valid_probs.detach().cpu())
+            all_logits.append(valid_logits.detach().cpu())
 
         avg_loss = total_loss / max(len(loader.dataset), 1)  # type: ignore[arg-type]
         accuracy = correct / max(total, 1)
@@ -118,6 +119,7 @@ class Evaluator:
         y_true = torch.cat(all_targets).numpy().astype(np.int32)
         y_pred = torch.cat(all_preds).numpy().astype(np.int32)
         y_prob = torch.cat(all_probs).numpy().astype(np.float32)
+        y_logits = torch.cat(all_logits).numpy().astype(np.float32)
         communication_metrics = aggregate_communication_stats(
             {split: communication_stats},
             model,
@@ -132,6 +134,7 @@ class Evaluator:
             y_true=y_true,
             y_pred=y_pred,
             y_prob=y_prob,
+            y_logits=y_logits,
             communication_metrics=communication_metrics,
         )
 

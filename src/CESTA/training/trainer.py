@@ -19,6 +19,7 @@ from numpy.typing import NDArray
 from torch.utils.data import DataLoader
 
 from CESTA.datasets.windowed import WindowedSplit
+from CESTA.evaluation.communication import aggregate_communication_stats, normalize_communication_stats
 from CESTA.logging import logger
 from CESTA.metrics import ClassMetrics, compute_class_metrics, macro_f1
 from CESTA.models.base import BaseModel
@@ -234,7 +235,7 @@ class Trainer:
         for epoch in range(1, self.config.epochs + 1):
             self._maybe_anneal_gumbel_temperature(model, epoch)
 
-            train_loss, train_acc, train_cm = self._train_epoch(
+            train_loss, train_acc, train_cm, train_diagnostics = self._train_epoch(
                 model, train_loader, criterion, optimizer
             )
             train_class_metrics = compute_class_metrics(
@@ -246,10 +247,11 @@ class Trainer:
             val_acc: float | None = None
             val_macro_f1: float | None = None
             val_class_metrics: ClassMetrics | None = None
+            val_communication: dict[str, float | None] = {}
 
             if val_loader is not None:
-                val_loss, val_acc, val_cm = self._eval_epoch(
-                    model, val_loader, criterion
+                val_loss, val_acc, val_cm, val_communication = self._eval_epoch(
+                    model, val_loader, criterion, metadata
                 )
                 val_class_metrics = compute_class_metrics(
                     val_cm[0], val_cm[1], num_classes
@@ -266,6 +268,13 @@ class Trainer:
                 val_macro_f1=val_macro_f1,
                 train_class_metrics=train_class_metrics,
                 val_class_metrics=val_class_metrics,
+                val_request_ratio=val_communication.get("request_ratio"),
+                val_energy_ratio=val_communication.get("energy_ratio"),
+                val_total_energy_j=val_communication.get("total_energy_j"),
+                train_task_loss=train_diagnostics.get("task_loss"),
+                train_expected_energy_ratio=train_diagnostics.get("expected_energy_ratio"),
+                gate_entropy=train_diagnostics.get("gate_entropy"),
+                gate_gradient_norm=train_diagnostics.get("gate_gradient_norm"),
             )
             result.history.append(metrics)
 
@@ -399,11 +408,16 @@ class Trainer:
         loader: DataLoader[object],
         criterion: nn.Module,
         optimizer: torch.optim.Optimizer,
-    ) -> tuple[float, float, tuple[list[torch.Tensor], list[torch.Tensor]]]:
+    ) -> tuple[
+        float,
+        float,
+        tuple[list[torch.Tensor], list[torch.Tensor]],
+        dict[str, float | None],
+    ]:
         """Run one training epoch.
 
         Returns:
-            ``(avg_loss, accuracy, (all_preds, all_targets))`` over the epoch.
+            ``(avg_loss, accuracy, (all_preds, all_targets), diagnostics)`` over the epoch.
         """
         model.train()
         total_loss = 0.0
@@ -411,6 +425,11 @@ class Trainer:
         total = 0
         all_preds: list[torch.Tensor] = []
         all_targets: list[torch.Tensor] = []
+        task_loss_total = 0.0
+        expected_energy_total = 0.0
+        gate_entropy_total = 0.0
+        gate_gradient_norm_total = 0.0
+        diagnostic_batches = 0
 
         for batch in loader:
             model_input, y_batch, node_mask, batch_size = prepare_batch(batch, self.device)
@@ -418,12 +437,29 @@ class Trainer:
             optimizer.zero_grad()
             logits = model(model_input)
 
-            loss = masked_loss(criterion, logits, y_batch, node_mask)
-            loss = apply_training_objective(self.config, model, loss, logits, y_batch, node_mask)
+            task_loss = masked_loss(criterion, logits, y_batch, node_mask)
+            loss = apply_training_objective(
+                self.config,
+                model,
+                task_loss,
+                logits,
+                y_batch,
+                node_mask,
+            )
+            expected_energy = getattr(model, "communication_energy_loss", None)
             loss.backward()
+            gate_gradient_norm = self._gate_gradient_norm(model)
             optimizer.step()
 
             total_loss += loss.item() * batch_size
+            task_loss_total += task_loss.item() * batch_size
+            if isinstance(expected_energy, torch.Tensor):
+                expected_energy_total += expected_energy.detach().item() * batch_size
+            gate_entropy = getattr(model, "gate_entropy", None)
+            if isinstance(gate_entropy, torch.Tensor):
+                gate_entropy_total += gate_entropy.detach().item() * batch_size
+            gate_gradient_norm_total += gate_gradient_norm * batch_size
+            diagnostic_batches += batch_size
             preds = decode_predictions(model, logits, node_mask)
             valid_preds, valid_targets = valid_predictions(preds, y_batch, node_mask)
             correct += (valid_preds == valid_targets).sum().item()
@@ -434,7 +470,13 @@ class Trainer:
 
         avg_loss = total_loss / max(len(loader.dataset), 1)  # type: ignore[arg-type]
         accuracy = correct / max(total, 1)
-        return avg_loss, accuracy, (all_preds, all_targets)
+        diagnostics = {
+            "task_loss": task_loss_total / max(diagnostic_batches, 1),
+            "expected_energy_ratio": expected_energy_total / max(diagnostic_batches, 1) if diagnostic_batches else None,
+            "gate_entropy": gate_entropy_total / max(diagnostic_batches, 1) if diagnostic_batches else None,
+            "gate_gradient_norm": gate_gradient_norm_total / max(diagnostic_batches, 1) if diagnostic_batches else None,
+        }
+        return avg_loss, accuracy, (all_preds, all_targets), diagnostics
 
     @torch.no_grad()
     def _eval_epoch(
@@ -442,7 +484,13 @@ class Trainer:
         model: BaseModel,
         loader: DataLoader[object],
         criterion: nn.Module,
-    ) -> tuple[float, float, tuple[list[torch.Tensor], list[torch.Tensor]]]:
+        metadata: dict[str, object] | None,
+    ) -> tuple[
+        float,
+        float,
+        tuple[list[torch.Tensor], list[torch.Tensor]],
+        dict[str, float | None],
+    ]:
         """Run one evaluation epoch.
 
         Returns:
@@ -454,6 +502,7 @@ class Trainer:
         total = 0
         all_preds: list[torch.Tensor] = []
         all_targets: list[torch.Tensor] = []
+        communication_stats: list[dict[str, object]] = []
 
         for batch in loader:
             model_input, y_batch, node_mask, batch_size = prepare_batch(batch, self.device)
@@ -461,6 +510,9 @@ class Trainer:
             logits = model(model_input)
             loss = masked_loss(criterion, logits, y_batch, node_mask)
             loss = add_auxiliary_loss(self.config, model, loss)
+            stats = getattr(model, "last_communication_stats", None)
+            if isinstance(stats, dict):
+                communication_stats.append(normalize_communication_stats(stats))
 
             total_loss += loss.item() * batch_size
             preds = decode_predictions(model, logits, node_mask)
@@ -473,4 +525,46 @@ class Trainer:
 
         avg_loss = total_loss / max(len(loader.dataset), 1)  # type: ignore[arg-type]
         accuracy = correct / max(total, 1)
-        return avg_loss, accuracy, (all_preds, all_targets)
+        communication = self._validation_communication(model, communication_stats, metadata)
+        return avg_loss, accuracy, (all_preds, all_targets), communication
+
+    @staticmethod
+    def _gate_gradient_norm(model: BaseModel) -> float:
+        request_gate = getattr(model, "request_gate", None)
+        parameters = request_gate.parameters() if isinstance(request_gate, nn.Module) else []
+        squared_norm = sum(
+            float(parameter.grad.detach().pow(2).sum().item())
+            for parameter in parameters
+            if parameter.grad is not None
+        )
+        return squared_norm**0.5
+
+    @staticmethod
+    def _validation_communication(
+        model: BaseModel,
+        stats: list[dict[str, object]],
+        metadata: dict[str, object] | None,
+    ) -> dict[str, float | None]:
+        metrics = aggregate_communication_stats({"val": stats}, model, metadata)
+        if not isinstance(metrics, dict):
+            return {}
+        splits = metrics.get("splits")
+        split = splits.get("val") if isinstance(splits, dict) else None
+        if not isinstance(split, dict):
+            return {}
+        energy = split.get("energy")
+        selective = energy.get("selective") if isinstance(energy, dict) else None
+        dense = energy.get("dense_reference") if isinstance(energy, dict) else None
+        total_energy = selective.get("total_energy_j") if isinstance(selective, dict) else None
+        dense_energy = dense.get("total_energy_j") if isinstance(dense, dict) else None
+        energy_ratio = (
+            float(total_energy) / float(dense_energy)
+            if isinstance(total_energy, int | float) and isinstance(dense_energy, int | float) and dense_energy > 0.0
+            else None
+        )
+        request_ratio = split.get("active_request_ratio")
+        return {
+            "request_ratio": float(request_ratio) if isinstance(request_ratio, int | float) else None,
+            "energy_ratio": energy_ratio,
+            "total_energy_j": float(total_energy) if isinstance(total_energy, int | float) else None,
+        }

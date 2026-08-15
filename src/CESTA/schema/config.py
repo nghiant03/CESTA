@@ -123,9 +123,12 @@ class TrainConfig(BaseModel):
         oversample: Whether to oversample minority (non-NORMAL) classes.
         oversample_ratio: Target ratio of minority to majority samples (1.0 = balanced).
         communication_penalty_weight: Weight for communication auxiliary loss (0 = disabled).
-        communication_penalty_mode: ``"linear"`` for L1 penalty or ``"budget_hinge"`` for
-            ``relu(ratio - target)^2``.
+        communication_penalty_mode: ``"linear"`` for request-ratio L1 penalty,
+            ``"budget_hinge"`` for ``relu(ratio - target)^2``, ``"energy"`` for
+            expected TX+RX energy relative to dense communication, or ``"energy_budget_hinge"``
+            for a hinge on expected TX+RX energy.
         target_request_ratio: Target active request ratio for budget_hinge mode.
+        target_energy_ratio: Target expected TX+RX energy relative to dense communication.
         gate_entropy_weight: Weight for gate entropy regularization (0 = disabled).
             Positive weight encourages higher gate entropy to prevent collapse to all-zero.
         voi_gate_loss_weight: Weight for value-of-information gate loss (0 = disabled).
@@ -166,8 +169,9 @@ class TrainConfig(BaseModel):
     oversample: bool = False
     oversample_ratio: float = Field(default=1.0, gt=0.0, le=1.0)
     communication_penalty_weight: float = Field(default=0.0, ge=0.0)
-    communication_penalty_mode: str = Field(default="linear", pattern=r"^(linear|budget_hinge)$")
+    communication_penalty_mode: str = Field(default="linear", pattern=r"^(linear|budget_hinge|energy|energy_budget_hinge)$")
     target_request_ratio: float = Field(default=0.3, ge=0.0, le=1.0)
+    target_energy_ratio: float = Field(default=0.5, ge=0.0, le=1.0)
     gate_entropy_weight: float = Field(default=0.0, ge=0.0)
     voi_gate_loss_weight: float = Field(default=0.0, ge=0.0)
     counterfactual_voi_loss_weight: float = Field(default=0.0, ge=0.0)

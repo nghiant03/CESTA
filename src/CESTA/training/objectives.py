@@ -49,10 +49,13 @@ def add_auxiliary_loss(
 ) -> torch.Tensor:
     weight = config.communication_penalty_weight
     if weight > 0.0:
-        comm_loss = getattr(model, "communication_loss", None)
+        uses_energy = config.communication_penalty_mode in {"energy", "energy_budget_hinge"}
+        loss_name = "communication_energy_loss" if uses_energy else "communication_loss"
+        comm_loss = getattr(model, loss_name, None)
         if comm_loss is not None and isinstance(comm_loss, torch.Tensor):
-            if config.communication_penalty_mode == "budget_hinge":
-                excess = torch.relu(comm_loss - config.target_request_ratio)
+            if config.communication_penalty_mode in {"budget_hinge", "energy_budget_hinge"}:
+                target = config.target_energy_ratio if uses_energy else config.target_request_ratio
+                excess = torch.relu(comm_loss - target)
                 loss = loss + weight * (excess**2)
             else:
                 loss = loss + weight * comm_loss

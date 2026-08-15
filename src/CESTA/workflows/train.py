@@ -92,13 +92,16 @@ def run_training(
     run_id = run_dir.name
     logger.info("Run dir: {}", run_dir)
 
+    energy_constrained = config.communication_penalty_mode == "energy_budget_hinge"
+    checkpoint_callback = CheckpointCallback(
+        save_path=run_dir,
+        config_dict=config.model_dump(mode="json"),
+        monitor=config.checkpoint_monitor,
+        maximum_val_energy_ratio=config.target_energy_ratio if energy_constrained else None,
+    )
     callbacks = [
         LoggingCallback(),
-        CheckpointCallback(
-            save_path=run_dir,
-            config_dict=config.model_dump(mode="json"),
-            monitor=config.checkpoint_monitor,
-        ),
+        checkpoint_callback,
         HistoryCallback(save_path=run_dir),
     ]
 
@@ -140,6 +143,8 @@ def run_training(
         result.stopped_epoch,
         result.best_val_loss if result.best_val_loss is not None else float("nan"),
     )
+    if not checkpoint_callback.has_eligible_checkpoint:
+        raise RuntimeError("training produced no budget-feasible validation checkpoint")
     logger.info("Model saved to: {}", run_dir)
 
     if test_evaluation and prepared.has_test:

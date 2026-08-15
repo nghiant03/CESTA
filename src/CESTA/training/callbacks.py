@@ -42,6 +42,13 @@ class TrainMetrics:
     val_macro_f1: float | None = None
     train_class_metrics: ClassMetrics | None = None
     val_class_metrics: ClassMetrics | None = None
+    val_request_ratio: float | None = None
+    val_energy_ratio: float | None = None
+    val_total_energy_j: float | None = None
+    train_task_loss: float | None = None
+    train_expected_energy_ratio: float | None = None
+    gate_entropy: float | None = None
+    gate_gradient_norm: float | None = None
 
 
 class TrainingCallback(ABC):
@@ -79,6 +86,8 @@ class LoggingCallback(TrainingCallback):
             parts.append(f"val_acc={metrics.val_acc:.4f}")
         if metrics.val_macro_f1 is not None:
             parts.append(f"val_f1={metrics.val_macro_f1:.4f}")
+        if metrics.val_energy_ratio is not None:
+            parts.append(f"val_energy_ratio={metrics.val_energy_ratio:.4f}")
 
         logger.info(" | ".join(parts))
         return True
@@ -157,7 +166,10 @@ class CheckpointCallback(TrainingCallback):
     save_path: str | Path = "best_model"
     config_dict: dict[str, object] | None = None
     monitor: str = "val_loss"
+    maximum_val_energy_ratio: float | None = None
     _best: float = field(default=float("inf"), init=False, repr=False)
+    _best_energy: float = field(default=float("inf"), init=False, repr=False)
+    _best_epoch: int | None = field(default=None, init=False, repr=False)
 
     def __post_init__(self) -> None:
         self._direction_maximize = self.monitor != "val_loss"
@@ -183,13 +195,38 @@ class CheckpointCallback(TrainingCallback):
         from CESTA.artifacts import save_checkpoint
 
         value = self._metric_value(metrics)
+        candidate_energy = metrics.val_energy_ratio
+        if self.maximum_val_energy_ratio is not None:
+            if candidate_energy is None or candidate_energy > self.maximum_val_energy_ratio:
+                logger.info(
+                    "Checkpoint epoch {} is energy-ineligible (ratio={}, target={:.4f})",
+                    metrics.epoch,
+                    candidate_energy,
+                    self.maximum_val_energy_ratio,
+                )
+                return True
 
-        improved = value > self._best if self._direction_maximize else value < self._best
+        if self._best_epoch is None:
+            improved = True
+        elif self._direction_maximize:
+            improved = value > self._best or (
+                value == self._best and candidate_energy is not None and candidate_energy < self._best_energy
+            )
+        else:
+            improved = value < self._best or (
+                value == self._best and candidate_energy is not None and candidate_energy < self._best_energy
+            )
         if improved:
             self._best = value
+            self._best_energy = candidate_energy if candidate_energy is not None else float("inf")
+            self._best_epoch = metrics.epoch
             save_checkpoint(model, self.save_path, config_dict=self.config_dict)
             logger.info("Saved checkpoint to {} ({}={:.4f})", self.save_path, self.monitor, value)
         return True
+
+    @property
+    def has_eligible_checkpoint(self) -> bool:
+        return self._best_epoch is not None
 
 
 @dataclass
