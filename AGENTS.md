@@ -5,7 +5,7 @@ Keep this file current after code changes. CESTA is a research project for commu
 ## Development rules
 
 - Use `uv` for Python environments and commands.
-- Run targeted validation first, then `uv run ruff check src/CESTA` and `uv run pyright src/CESTA` after Python source changes.
+- Do not add or maintain automated tests; validate changes with targeted runtime checks, `uv run ruff check src/CESTA`, and `uv run pyright src/CESTA`.
 - Ruff uses line length 150 and import sorting from `pyproject.toml`.
 - Use `from __future__ import annotations` and lazy function imports instead of `typing.TYPE_CHECKING`.
 - Reconsider names whenever their purpose changes.
@@ -86,11 +86,11 @@ runs/<model>/<run_id>/
 
 ## CESTA model
 
-`CESTAClassifier` is under `models/spatial/cesta/` and accepts graph-aligned input `(batch, window, nodes * features)`. Modes are `none`, `dense`, `gumbel_request`, `random`, `static_topk`, `entropy`, `margin`, `local_change`, and `combined`.
+`CESTAClassifier` is under `models/spatial/cesta/` and accepts graph-aligned input `(batch, window, nodes * features)`. Modes are `none`, `dense`, `gumbel_request`, `random`, `static_topk`, and `local_change`.
 
 Request decisions must use receiver-local state, local uncertainty, and edge metadata only. They cannot inspect sender hidden states before communication. Aggregation uses receiver queries and received sender keys/values, softmax over the received set only, and zero graph context when none are received.
 
-The model may expose communication statistics, neighbor beliefs, boundary logits, CRF decoding, communication-conditioned correction, structured top-k requests, VOI objectives, and rule controls. Rule-control decisions use receiver-local scores and edge metadata, and their validation-tuned parameters must be persisted in communication artifacts. Random controls derive decisions from stable window, timestep, receiver, sender, and controller-seed identities. Freeze inactive learned-gate parameters in rule modes and persist active and total parameter counts. Keep transmitted-bit estimates aligned with the actual payload and preserve gradient-bearing communication ratios for training penalties. Evaluation aggregates per-edge requested/possible counts against canonical graph distances.
+The model may expose communication statistics, soft receiver request probabilities, neighbor beliefs, boundary logits, CRF decoding, communication-conditioned correction, structured top-k requests, VOI objectives, and rule controls. Receiver request probabilities must exclude unavailable edges before aggregation. Rule-control decisions use receiver-local scores and edge metadata, and their validation-tuned parameters must be persisted in communication artifacts. Random controls derive decisions from stable window, timestep, receiver, sender, and controller-seed identities. Freeze inactive learned-gate parameters in rule modes and persist active and total parameter counts. Keep transmitted-bit estimates aligned with the actual payload and preserve gradient-bearing communication ratios and expected energy for training penalties. Evaluation aggregates per-edge requested/possible counts against canonical graph distances.
 
 ## Firmware
 
@@ -111,6 +111,7 @@ uv run python scripts/generate_control_tuning.py --spec config/benchmark/control
 uv run python scripts/derive_control_budgets.py --runs-csv <validation-runs.csv> --source-variant <variant> --output runs/control-tuning/control-budgets.yaml
 uv run python scripts/lock_control_policies.py --budgets <budgets.yaml> --validation-runs-csv <validation-runs.csv> --controller <control> <variants...> --output runs/control-tuning/control-lock.yaml
 uv run python scripts/audit_locked_controls.py --lock <control-lock.yaml> --test-runs-csv <test-runs.csv> --output runs/control-locked-audit
+uv run python scripts/audit_validation_logit_sensitivity.py --model <run> --data <dataset>
 ```
 
 The baseline runner reconciles completed cells from manifests and resolved configs. Use split-matched diagnosis configs for direct CESTA accuracy claims; legacy `80/10/10` runs are descriptive only. The benchmark auditor rejects missing, duplicate, inconsistent, or incomparable cells without selecting by test performance.
