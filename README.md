@@ -38,7 +38,7 @@ Training is config-file-first. Diagnosis and benchmark configurations live under
 - Markov injection of `SPIKE`, `DRIFT`, and `STUCK` sensor faults.
 - Temporal models: CNN1D, LSTM, GRU, Transformer, Autoformer, Informer, PatchTST, and ModernTCN.
 - Spatial models: dynamic ST-GCN and CESTA.
-- CESTA modes: no communication, dense communication, receiver-side Gumbel request gating, and random, static top-k, entropy, margin, local-change, or combined rule-based controls.
+- CESTA modes: no communication, dense communication, receiver-side Gumbel request gating, and random, static top-k, or local-change rule-based controls.
 - Canonical graph datasets with node masks, dynamic edge masks, node positions, and edge distances.
 - Classification, communication, and theoretical TX+RX radio-energy metrics.
 - Reproducible manifests, configs, checkpoints, histories, predictions, and Optuna searches.
@@ -88,7 +88,7 @@ uv run python scripts/derive_control_budgets.py \
 uv run python scripts/lock_control_policies.py \
   --budgets runs/control-tuning/control-budgets.yaml \
   --validation-runs-csv runs/control-validation-audit/runs.csv \
-  --controller entropy <candidate-variants> \
+  --controller local_change <candidate-variants> \
   --output runs/control-tuning/control-lock.yaml
 
 uv run python scripts/audit_locked_controls.py \

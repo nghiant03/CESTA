@@ -25,6 +25,8 @@ class CESTACommunicationMixin:
     neighbor_ranker: Any
     training: bool
     gumbel_temperature: float
+    request_threshold: float
+    use_temporal_change_gate_feature: bool
     W_q: Any
     W_k: Any
     W_v: Any
@@ -34,6 +36,7 @@ class CESTACommunicationMixin:
     logit_correction: Any
     edge_index: torch.Tensor
     edge_prob: torch.Tensor
+    edge_distance_m: torch.Tensor
     precision_bits: int
     encoder_output_size: int
     neighbor_belief_size: int
@@ -44,13 +47,7 @@ class CESTACommunicationMixin:
     control_request_ratio: float
     control_seed: int
     control_static_topk: int
-    control_entropy_threshold: float
-    control_margin_threshold: float
     control_local_change_threshold: float
-    control_combined_threshold: float
-    control_entropy_weight: float
-    control_margin_weight: float
-    control_local_change_weight: float
     _active_window_ids: torch.Tensor | None
 
     def _dense_neighbor_context(
@@ -87,23 +84,10 @@ class CESTACommunicationMixin:
         if self.communication_mode == "static_topk":
             return self._static_topk_request_mask(local_hidden, possible_mask)
 
-        entropy, margin, local_change = self._receiver_control_scores(local_hidden)
-        if self.communication_mode == "entropy":
-            need = entropy >= self.control_entropy_threshold
-        elif self.communication_mode == "margin":
-            need = margin <= self.control_margin_threshold
-        elif self.communication_mode == "local_change":
-            need = local_change >= self.control_local_change_threshold
-        elif self.communication_mode == "combined":
-            weight_sum = self.control_entropy_weight + self.control_margin_weight + self.control_local_change_weight
-            combined = (
-                self.control_entropy_weight * entropy
-                + self.control_margin_weight * (1.0 - margin)
-                + self.control_local_change_weight * local_change
-            ) / weight_sum
-            need = combined >= self.control_combined_threshold
-        else:
+        if self.communication_mode != "local_change":
             raise ValueError(f"Unsupported rule-based communication mode: {self.communication_mode}")
+        _, _, local_change = self._receiver_control_scores(local_hidden)
+        need = local_change >= self.control_local_change_threshold
         return need.to(local_hidden.dtype).unsqueeze(-1) * possible_mask
 
     def _stable_random_values(
@@ -186,8 +170,13 @@ class CESTACommunicationMixin:
                     dim=-1,
                 )
             else:
-                gate_probs = F.one_hot(gate_logits.argmax(dim=-1), num_classes=2).to(
-                    local_hidden.dtype
+                request_probability = soft_gate_probs[..., 1]
+                gate_probs = torch.stack(
+                    [
+                        (request_probability < self.request_threshold).to(local_hidden.dtype),
+                        (request_probability >= self.request_threshold).to(local_hidden.dtype),
+                    ],
+                    dim=-1,
                 )
 
             request_mask = gate_probs[..., 1] * possible_mask
@@ -265,11 +254,18 @@ class CESTACommunicationMixin:
         else:
             mask_expanded = mask
 
-        scores = scores.masked_fill(mask_expanded == 0, float("-inf"))
-
-        has_neighbors = mask_expanded.sum(dim=-1, keepdim=True) > 0  # (B, T, N, 1)
-        alpha = F.softmax(scores, dim=-1)                             # (B, T, N, N)
-        alpha = torch.where(has_neighbors, alpha, torch.zeros_like(alpha))
+        hard_mask = mask_expanded.detach().ne(0)
+        has_neighbors = hard_mask.any(dim=-1, keepdim=True)
+        selected_max = scores.masked_fill(~hard_mask, float("-inf")).amax(dim=-1, keepdim=True)
+        global_max = scores.amax(dim=-1, keepdim=True)
+        shift = torch.where(has_neighbors, selected_max, global_max).detach()
+        weight_dtype = torch.float32 if scores.dtype in {torch.float16, torch.bfloat16} else scores.dtype
+        shifted_scores = scores.to(weight_dtype) - shift.to(weight_dtype)
+        stable_shifted_scores = torch.where(hard_mask, shifted_scores, shifted_scores.clamp_max(0.0))
+        weights = mask_expanded.to(weight_dtype) * torch.exp(stable_shifted_scores)
+        denominator = weights.sum(dim=-1, keepdim=True)
+        safe_denominator = torch.where(has_neighbors, denominator, torch.ones_like(denominator))
+        alpha = (weights / safe_denominator).to(V.dtype)
 
         return torch.einsum("btij,btjh->btih", alpha, V)
 
@@ -363,7 +359,14 @@ class CESTACommunicationMixin:
         receiver_margin = margin.unsqueeze(3).expand(B, T, N, N, 1)
         edge_prob = cast(torch.Tensor, self.edge_prob).to(device=local_hidden.device, dtype=local_hidden.dtype)
         edge_prob_features = edge_prob.view(1, 1, N, N, 1).expand(B, T, N, N, 1)
-        return torch.cat([receiver_state, receiver_entropy, receiver_margin, edge_prob_features], dim=-1) * possible_mask.unsqueeze(-1)
+        feature_parts = [receiver_state, receiver_entropy, receiver_margin, edge_prob_features]
+        if self.use_temporal_change_gate_feature:
+            change = torch.zeros((B, T, N, 1), dtype=local_hidden.dtype, device=local_hidden.device)
+            if T > 1:
+                delta = torch.linalg.vector_norm(local_hidden[:, 1:] - local_hidden[:, :-1], dim=-1, keepdim=True)
+                change[:, 1:] = delta / (1.0 + delta)
+            feature_parts.append(change.unsqueeze(3).expand(B, T, N, N, 1))
+        return torch.cat(feature_parts, dim=-1) * possible_mask.unsqueeze(-1)
 
     def _possible_message_mask(
         self,
@@ -466,6 +469,29 @@ class CESTACommunicationMixin:
             "possible_edge_counts": [float(x) for x in possible_edge_counts.detach().cpu().tolist()],
         }
 
+    def _expected_energy_ratio(
+        self,
+        request_probability: torch.Tensor,
+        possible_mask: torch.Tensor,
+        edge_index: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        from CESTA.evaluation.energy import message_energy_j
+
+        active_edge_index = edge_index if edge_index is not None else cast(torch.Tensor, self.edge_index)
+        active_edge_index = active_edge_index.to(device=possible_mask.device, dtype=torch.long)
+        distances = cast(torch.Tensor, self.edge_distance_m).detach().cpu().tolist()
+        costs = torch.as_tensor(
+            message_energy_j(distances, self._bits_per_message()),
+            dtype=request_probability.dtype,
+            device=request_probability.device,
+        )
+        sender = active_edge_index[0]
+        receiver = active_edge_index[1]
+        expected_counts = (request_probability * possible_mask)[:, :, receiver, sender].sum(dim=(0, 1))
+        possible_counts = possible_mask[:, :, receiver, sender].sum(dim=(0, 1))
+        dense_energy = (possible_counts * costs).sum().clamp_min(torch.finfo(request_probability.dtype).tiny)
+        return (expected_counts * costs).sum() / dense_energy
+
     @staticmethod
     def _request_communication_loss(
         request_mask: torch.Tensor,
@@ -480,7 +506,7 @@ class CESTACommunicationMixin:
         possible_mask: torch.Tensor,
     ) -> torch.Tensor:
         possible_count = possible_mask.sum(dim=-1).clamp_min(1.0)
-        return request_mask.sum(dim=-1) / possible_count
+        return (request_mask * possible_mask).sum(dim=-1) / possible_count
 
     @staticmethod
     def _dense_communication_loss(possible_mask: torch.Tensor) -> torch.Tensor:
@@ -511,11 +537,12 @@ class CESTACommunicationMixin:
     def _compute_gate_entropy(
         self,
         soft_gate_probs: torch.Tensor,
+        possible_mask: torch.Tensor,
     ) -> torch.Tensor:
-        """Compute entropy of gate probabilities averaged over all nodes and timesteps."""
         log_probs = torch.log(soft_gate_probs.clamp_min(1e-8))
         entropy_per_element = -(soft_gate_probs * log_probs).sum(dim=-1)
-        return entropy_per_element.mean()
+        possible_edges = possible_mask.sum().clamp_min(1.0)
+        return (entropy_per_element * possible_mask).sum() / possible_edges
 
     def _possible_edge_count(self, device: torch.device | None = None) -> float:
         edge_index = cast(torch.Tensor, self.edge_index)

@@ -19,13 +19,10 @@ CommunicationMode = Literal[
     "gumbel_request",
     "random",
     "static_topk",
-    "entropy",
-    "margin",
     "local_change",
-    "combined",
 ]
 
-_RULE_COMMUNICATION_MODES = {"random", "static_topk", "entropy", "margin", "local_change", "combined"}
+_RULE_COMMUNICATION_MODES = {"random", "static_topk", "local_change"}
 
 
 class CESTAClassifier(CESTASequenceMixin, CESTACommunicationMixin, BaseModel):
@@ -43,6 +40,7 @@ class CESTAClassifier(CESTASequenceMixin, CESTACommunicationMixin, BaseModel):
         num_nodes: int,
         edge_index: list[list[int]] | None = None,
         edge_prob: list[float] | None = None,
+        edge_distance_m: list[float] | None = None,
         hidden_size: int = 64,
         num_layers: int = 1,
         num_classes: int = 4,
@@ -51,7 +49,9 @@ class CESTAClassifier(CESTASequenceMixin, CESTACommunicationMixin, BaseModel):
         fusion_hidden_size: int | None = None,
         precision_bits: int = 32,
         gumbel_temperature: float = 1.0,
+        request_threshold: float = 0.5,
         gate_hidden_size: int = 32,
+        use_temporal_change_gate_feature: bool = False,
         num_attention_heads: int = 1,
         graph_residual_init: float = 1.0,
         bidirectional: bool = False,
@@ -68,13 +68,7 @@ class CESTAClassifier(CESTASequenceMixin, CESTACommunicationMixin, BaseModel):
         control_request_ratio: float = 0.3,
         control_seed: int = 42,
         control_static_topk: int = 1,
-        control_entropy_threshold: float = 0.5,
-        control_margin_threshold: float = 0.5,
         control_local_change_threshold: float = 0.5,
-        control_combined_threshold: float = 0.5,
-        control_entropy_weight: float = 1.0,
-        control_margin_weight: float = 1.0,
-        control_local_change_weight: float = 1.0,
     ) -> None:
         super().__init__()
         if input_size % num_nodes != 0:
@@ -84,6 +78,8 @@ class CESTAClassifier(CESTASequenceMixin, CESTACommunicationMixin, BaseModel):
             raise ValueError(f"communication_mode must be one of: {', '.join(sorted(allowed_communication_modes))}")
         if gumbel_temperature <= 0.0:
             raise ValueError("gumbel_temperature must be positive")
+        if not 0.0 <= request_threshold <= 1.0:
+            raise ValueError("request_threshold must be in [0, 1]")
         if gate_hidden_size < 1:
             raise ValueError("gate_hidden_size must be positive")
         if num_attention_heads < 1:
@@ -104,24 +100,8 @@ class CESTAClassifier(CESTASequenceMixin, CESTACommunicationMixin, BaseModel):
             raise ValueError("control_request_ratio must be in [0, 1]")
         if control_static_topk < 1:
             raise ValueError("control_static_topk must be positive")
-        control_thresholds = {
-            "control_entropy_threshold": control_entropy_threshold,
-            "control_margin_threshold": control_margin_threshold,
-            "control_local_change_threshold": control_local_change_threshold,
-            "control_combined_threshold": control_combined_threshold,
-        }
-        for name, value in control_thresholds.items():
-            if not 0.0 <= value <= 1.0:
-                raise ValueError(f"{name} must be in [0, 1]")
-        control_weights = {
-            "control_entropy_weight": control_entropy_weight,
-            "control_margin_weight": control_margin_weight,
-            "control_local_change_weight": control_local_change_weight,
-        }
-        if any(value < 0.0 for value in control_weights.values()):
-            raise ValueError("control weights must be non-negative")
-        if communication_mode == "combined" and sum(control_weights.values()) <= 0.0:
-            raise ValueError("combined communication requires at least one positive control weight")
+        if not 0.0 <= control_local_change_threshold <= 1.0:
+            raise ValueError("control_local_change_threshold must be in [0, 1]")
 
         self.input_size = input_size
         self.num_nodes = num_nodes
@@ -134,7 +114,9 @@ class CESTAClassifier(CESTASequenceMixin, CESTACommunicationMixin, BaseModel):
         self.fusion_hidden_size = fusion_hidden_size
         self.precision_bits = precision_bits
         self.gumbel_temperature = gumbel_temperature
+        self.request_threshold = request_threshold
         self.gate_hidden_size = gate_hidden_size
+        self.use_temporal_change_gate_feature = use_temporal_change_gate_feature
         self.num_attention_heads = num_attention_heads
         self.graph_residual_init = graph_residual_init
         self.bidirectional = bidirectional
@@ -151,13 +133,7 @@ class CESTAClassifier(CESTASequenceMixin, CESTACommunicationMixin, BaseModel):
         self.control_request_ratio = control_request_ratio
         self.control_seed = control_seed
         self.control_static_topk = control_static_topk
-        self.control_entropy_threshold = control_entropy_threshold
-        self.control_margin_threshold = control_margin_threshold
         self.control_local_change_threshold = control_local_change_threshold
-        self.control_combined_threshold = control_combined_threshold
-        self.control_entropy_weight = control_entropy_weight
-        self.control_margin_weight = control_margin_weight
-        self.control_local_change_weight = control_local_change_weight
         self._active_window_ids: torch.Tensor | None = None
         self.encoder_output_size = hidden_size * (2 if bidirectional else 1)
         self.neighbor_belief_size = num_classes + 2
@@ -167,6 +143,7 @@ class CESTAClassifier(CESTASequenceMixin, CESTACommunicationMixin, BaseModel):
         self._local_logits: torch.Tensor | None = None
         self._communication_logits: torch.Tensor | None = None
         self._communication_activity: torch.Tensor | None = None
+        self._receiver_request_probability: torch.Tensor | None = None
 
         if num_attention_heads != 1:
             raise NotImplementedError(
@@ -187,8 +164,17 @@ class CESTAClassifier(CESTASequenceMixin, CESTACommunicationMixin, BaseModel):
             edge_prob_tensor = torch.ones((edge_index_tensor.shape[1],), dtype=torch.float32)
         if edge_prob_tensor.shape != (edge_index_tensor.shape[1],):
             raise ValueError("edge_prob must have shape (num_edges,)")
+        if edge_distance_m is not None:
+            edge_distance_tensor = torch.tensor(edge_distance_m, dtype=torch.float32)
+        else:
+            edge_distance_tensor = torch.zeros((edge_index_tensor.shape[1],), dtype=torch.float32)
+        if edge_distance_tensor.shape != (edge_index_tensor.shape[1],):
+            raise ValueError("edge_distance_m must have shape (num_edges,)")
+        if bool((edge_distance_tensor < 0.0).any()):
+            raise ValueError("edge_distance_m must be non-negative")
         self.register_buffer("edge_index", edge_index_tensor)
         self.register_buffer("edge_prob_values", edge_prob_tensor)
+        self.register_buffer("edge_distance_m", edge_distance_tensor, persistent=False)
         edge_prob_matrix = torch.zeros((num_nodes, num_nodes), dtype=torch.float32)
         if edge_index_tensor.numel() > 0:
             edge_prob_matrix[edge_index_tensor[1], edge_index_tensor[0]] = edge_prob_tensor
@@ -222,8 +208,12 @@ class CESTAClassifier(CESTASequenceMixin, CESTACommunicationMixin, BaseModel):
         self.graph_residual_logit = nn.Parameter(
             torch.tensor(math.log(residual_init / (1.0 - residual_init)), dtype=torch.float32)
         )
+        self.gate_input_schema = ["receiver_hidden", "receiver_entropy", "receiver_margin", "edge_probability"]
+        if use_temporal_change_gate_feature:
+            self.gate_input_schema.append("receiver_temporal_change")
+        request_gate_input_size = self.encoder_output_size + len(self.gate_input_schema) - 1
         self.request_gate = nn.Sequential(
-            nn.Linear(self.encoder_output_size + 3, gate_hidden_size),
+            nn.Linear(request_gate_input_size, gate_hidden_size),
             nn.ReLU(),
             nn.Dropout(dropout),
             nn.Linear(gate_hidden_size, 2),
@@ -271,6 +261,7 @@ class CESTAClassifier(CESTASequenceMixin, CESTACommunicationMixin, BaseModel):
             self._zero_communication_stats()
         )
         self._communication_loss: torch.Tensor | None = None
+        self._communication_energy_loss: torch.Tensor | None = None
         self._gate_entropy: torch.Tensor | None = None
 
     def _freeze_inactive_parameters(self) -> None:
@@ -307,6 +298,10 @@ class CESTAClassifier(CESTASequenceMixin, CESTACommunicationMixin, BaseModel):
         return self._communication_loss
 
     @property
+    def communication_energy_loss(self) -> torch.Tensor | None:
+        return self._communication_energy_loss
+
+    @property
     def graph_residual_scale(self) -> torch.Tensor:
         return torch.sigmoid(self.graph_residual_logit)
 
@@ -329,6 +324,10 @@ class CESTAClassifier(CESTASequenceMixin, CESTACommunicationMixin, BaseModel):
     @property
     def communication_activity(self) -> torch.Tensor | None:
         return self._communication_activity
+
+    @property
+    def receiver_request_probability(self) -> torch.Tensor | None:
+        return self._receiver_request_probability
 
     @property
     def last_boundary_logits(self) -> torch.Tensor | None:
@@ -384,7 +383,9 @@ class CESTAClassifier(CESTASequenceMixin, CESTACommunicationMixin, BaseModel):
                 edge_index=edge_index,
             )
             self._communication_loss = self._dense_communication_loss(possible_mask)
+            self._communication_energy_loss = self._expected_energy_ratio(possible_mask, possible_mask, edge_index=edge_index)
             self._communication_activity = self._receiver_request_activity(possible_mask, possible_mask)
+            self._receiver_request_probability = self._communication_activity
             self._gate_entropy = None
         elif self.communication_mode == "gumbel_request":
             neighbor_context, request_mask, possible_mask, soft_gate_probs = (
@@ -408,8 +409,12 @@ class CESTAClassifier(CESTASequenceMixin, CESTACommunicationMixin, BaseModel):
                 request_mask=request_mask,
                 possible_mask=possible_mask,
             )
+            self._communication_energy_loss = self._expected_energy_ratio(
+                soft_gate_probs[..., 1], possible_mask, edge_index=edge_index
+            )
             self._communication_activity = self._receiver_request_activity(request_mask, possible_mask)
-            self._gate_entropy = self._compute_gate_entropy(soft_gate_probs)
+            self._receiver_request_probability = self._receiver_request_activity(soft_gate_probs[..., 1], possible_mask)
+            self._gate_entropy = self._compute_gate_entropy(soft_gate_probs, possible_mask)
         elif self.communication_mode in _RULE_COMMUNICATION_MODES:
             neighbor_context, request_mask, possible_mask = self._rule_neighbor_context(
                 local_hidden, edge_index=edge_index, edge_mask=edge_mask
@@ -430,14 +435,18 @@ class CESTAClassifier(CESTASequenceMixin, CESTACommunicationMixin, BaseModel):
                 request_mask=request_mask,
                 possible_mask=possible_mask,
             )
+            self._communication_energy_loss = self._expected_energy_ratio(request_mask, possible_mask, edge_index=edge_index)
             self._communication_activity = self._receiver_request_activity(request_mask, possible_mask)
+            self._receiver_request_probability = self._communication_activity
             self._gate_entropy = None
         else:
             possible_mask = self._possible_message_mask(local_hidden, edge_index=edge_index, edge_mask=edge_mask)
             hidden = self.dropout(local_hidden)
             self._last_communication_stats = self._zero_communication_stats(possible_mask=possible_mask, edge_index=edge_index)
             self._communication_loss = torch.zeros((), dtype=local_hidden.dtype, device=x.device)
+            self._communication_energy_loss = torch.zeros((), dtype=local_hidden.dtype, device=x.device)
             self._communication_activity = torch.zeros(batch, seq_len, self.num_nodes, dtype=local_hidden.dtype, device=x.device)
+            self._receiver_request_probability = self._communication_activity
             self._gate_entropy = None
 
         self._last_boundary_logits = self.boundary_head(hidden).squeeze(-1) if self.use_boundary_head else None
@@ -469,6 +478,7 @@ class CESTAClassifier(CESTASequenceMixin, CESTACommunicationMixin, BaseModel):
             "num_nodes": self.num_nodes,
             "edge_index": self._edge_index_list,
             "edge_prob": self._edge_prob_list,
+            "edge_distance_m": self.edge_distance_m.tolist(),
             "graph_edge_count": len(self._edge_prob_list),
             "hidden_size": self.hidden_size,
             "num_layers": self.num_layers,
@@ -478,7 +488,10 @@ class CESTAClassifier(CESTASequenceMixin, CESTACommunicationMixin, BaseModel):
             "fusion_hidden_size": self.fusion_hidden_size,
             "precision_bits": self.precision_bits,
             "gumbel_temperature": self.gumbel_temperature,
+            "request_threshold": self.request_threshold,
             "gate_hidden_size": self.gate_hidden_size,
+            "use_temporal_change_gate_feature": self.use_temporal_change_gate_feature,
+            "gate_input_schema": self.gate_input_schema,
             "num_attention_heads": self.num_attention_heads,
             "graph_residual_init": self.graph_residual_init,
             "bidirectional": self.bidirectional,
@@ -495,12 +508,6 @@ class CESTAClassifier(CESTASequenceMixin, CESTACommunicationMixin, BaseModel):
             "control_request_ratio": self.control_request_ratio,
             "control_seed": self.control_seed,
             "control_static_topk": self.control_static_topk,
-            "control_entropy_threshold": self.control_entropy_threshold,
-            "control_margin_threshold": self.control_margin_threshold,
             "control_local_change_threshold": self.control_local_change_threshold,
-            "control_combined_threshold": self.control_combined_threshold,
-            "control_entropy_weight": self.control_entropy_weight,
-            "control_margin_weight": self.control_margin_weight,
-            "control_local_change_weight": self.control_local_change_weight,
         }
 

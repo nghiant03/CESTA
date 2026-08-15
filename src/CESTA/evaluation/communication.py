@@ -26,17 +26,14 @@ def collect_model_communication_config(model: BaseModel) -> dict[str, Any] | Non
         "hidden_size",
         "gate_hidden_size",
         "gumbel_temperature",
+        "request_threshold",
+        "use_temporal_change_gate_feature",
+        "gate_input_schema",
         "precision_bits",
         "control_request_ratio",
         "control_seed",
         "control_static_topk",
-        "control_entropy_threshold",
-        "control_margin_threshold",
         "control_local_change_threshold",
-        "control_combined_threshold",
-        "control_entropy_weight",
-        "control_margin_weight",
-        "control_local_change_weight",
     )
     payload = {key: config.get(key) for key in keys}
     payload.update(
