@@ -20,23 +20,23 @@ uv run cesta --help
 ```bash
 # Transform raw Intel data into a canonical dataset
 uv run cesta transform intel_lab data/raw/Intel/data.txt data/canon/intel_lab \
-  --config config/data/intel_fault15.yaml
+  --config config/datasets/intel-lab/fault-15.yaml
 
 # Train temporal and communication-aware models
-uv run cesta train config/model/gru.yaml data/canon/intel_lab
-uv run cesta train config/model/cesta.yaml data/canon/intel_lab
+uv run cesta train config/training/gru.yaml data/canon/intel_lab
+uv run cesta train config/training/cesta.yaml data/canon/intel_lab
 
 # Evaluate a run, or create validation-only tuning artifacts
 uv run cesta evaluate --model runs/cesta/<run_id> --data data/canon/intel_lab
 uv run cesta evaluate --model runs/cesta/<run_id> --data data/canon/intel_lab --split val --output runs/control-validation
 ```
 
-Training is config-file-first. Diagnosis and benchmark configurations live under `config/model/diagnosis/`; use `uv run cesta <command> --help` for all command options.
+Training is config-file-first. Default training configurations under `config/training/` use the connectivity-chronological `70/15/15` split; diagnosis studies live under `config/experiments/`, and comparison specifications live under `config/benchmarks/`. Use `uv run cesta <command> --help` for all command options. Hydra uses a portable PyTorch implementation of the published bidirectional quasiseparable mixer, so it runs through the standard environment without requiring the official CUDA-only kernel package.
 
 ## Capabilities
 
 - Markov injection of `SPIKE`, `DRIFT`, and `STUCK` sensor faults.
-- Temporal models: CNN1D, LSTM, GRU, Transformer, Autoformer, Informer, PatchTST, and ModernTCN.
+- Temporal models: CNN1D, LSTM, GRU, Transformer, Autoformer, Informer, PatchTST, ModernTCN, and Hydra.
 - Spatial models: dynamic ST-GCN and CESTA.
 - CESTA modes: no communication, dense communication, receiver-side Gumbel request gating, and random, static top-k, or local-change rule-based controls.
 - Canonical graph datasets with node masks, dynamic edge masks, node positions, and edge distances.
@@ -63,7 +63,7 @@ Audit and summarize the decisive comparison with:
 
 ```bash
 uv run python scripts/audit_decisive_comparison.py \
-  --spec config/benchmark/decisive-comparison.yaml \
+  --spec config/benchmarks/decisive-comparison.yaml \
   --runs-root runs \
   --output runs/decisive-comparison-audit
 
@@ -77,7 +77,7 @@ Budget-matched controls use validation artifacts only until policies are locked:
 
 ```bash
 uv run python scripts/generate_control_tuning.py \
-  --spec config/benchmark/control-tuning.yaml \
+  --spec config/benchmarks/control-tuning.yaml \
   --output runs/control-tuning/generated
 
 uv run python scripts/derive_control_budgets.py \
@@ -113,8 +113,11 @@ src/CESTA/
 ├── evaluation/      # Metrics, energy, audit, and summaries
 └── optimization/    # Optuna search
 
-config/              # Data, model, diagnosis, and benchmark configs
-config/model/diagnosis/controls/  # Rule-control templates for validation tuning
+config/
+├── datasets/        # Dataset transformation and fault-injection configs
+├── training/        # Canonical model training configs
+├── experiments/     # Diagnosis ablations, controls, and sweeps
+└── benchmarks/      # Comparison and tuning-grid specifications
 docs/RESEARCH.md     # Research aim, protocol, evidence, and work plan
 firmware/             # ESP32-S3 firmware and deployment notes
 notebooks/            # Analysis notebooks

@@ -59,17 +59,23 @@ data:
     test_ratio: 0.15
 ```
 
-Use seeds `12`, `42`, and `1242`. Compare only runs with matching features, windowing, split boundaries, dataset hashes, test support, graph metadata, payload definition, and radio constants. Legacy temporal and ST-GCN runs use `80/10/10`; they remain descriptive but cannot support paired claims against the decisive `70/15/15` CESTA cohort.
+Use seeds `12`, `42`, and `1242`. Compare only runs with matching features, windowing, split boundaries, dataset hashes, test support, graph metadata, payload definition, and radio constants. All default model configurations use this decisive split; historical `80/10/10` runs remain descriptive but cannot support paired claims against the decisive `70/15/15` CESTA cohort.
 
 ### Baselines and controls
 
-- All temporal families: CNN1D, LSTM, GRU, Transformer, Autoformer, Informer, PatchTST, and ModernTCN.
+- All temporal families: CNN1D, LSTM, GRU, Transformer, Autoformer, Informer, PatchTST, ModernTCN, and Hydra.
 - Fixed CESTA temporal backbone without communication.
 - Dynamic ST-GCN and HiFiNet if it is applicable and reproducible.
 - Dense learned message passing over every available directed edge.
 - Static top-k connectivity, random communication, and entropy-, margin-, and local-change-based controllers at matched budgets.
 
 Lock the primary temporal family without reading test metrics. Require all 12 dataset-and-seed cells, rank families by mean checkpoint validation macro-F1, then break exact ties by lower validation standard deviation, lower active parameter count, and lexical model name. Tune controller thresholds and communication budgets on validation data only. Match controls primarily by dataset-level mean TX+RX energy across seeds within the interval `[98%, 100%]` of the learned target. Among matched candidates select the highest validation macro-F1; otherwise report the nearest candidate below target as under-budget unmatched. Keep equal combined-controller weights fixed during the first threshold sweep.
+
+Hydra is the selected Mamba-family temporal comparator. It is the natural bidirectional extension of Mamba, was published at NeurIPS 2024, has official code, and preserves `(batch, time, hidden)` outputs needed for CESTA's offline per-timestep labels. Use its non-causal convolution and quasiseparable mixer with a per-timestep linear classification head; do not add global or adaptive temporal pooling. This makes the temporal context comparable to the existing bidirectional LSTM and GRU baselines. CESTA uses a portable PyTorch implementation of the published Hydra equations instead of the official CUDA-only fused kernels; validate numerical behavior and report measured latency rather than attributing official-kernel throughput to this implementation.
+
+Mamba-2 remains the preferred causal ablation if online diagnosis becomes a separate research question, but it is not the primary offline comparator. MambaSL, accepted at ICLR 2026, is the strongest recent general time-series classification evidence, but its published task and adaptive pooling produce one label per window rather than one label per timestep. TSCMamba additionally introduces wavelet and multi-view feature engineering, which would confound a backbone comparison. At the decisive window length of 60, make no linear-time speed claim: the Mamba-2 paper reports its SSD speed crossover against FlashAttention-2 at length 2,000. Measure latency and peak memory instead.
+
+Primary sources: [Hydra paper](https://papers.nips.cc/paper_files/paper/2024/hash/c7f795dc3b4eb6ae630695d90001a2f8-Abstract-Conference.html), [Hydra implementation](https://github.com/goombalab/hydra), [Mamba-2 paper](https://arxiv.org/abs/2405.21060), [MambaSL paper](https://arxiv.org/abs/2604.15174), and [TSCMamba paper](https://arxiv.org/abs/2406.04419).
 
 ### Metrics and uncertainty
 
@@ -99,7 +105,7 @@ Audit CESTA artifacts with:
 
 ```bash
 uv run python scripts/audit_decisive_comparison.py \
-  --spec config/benchmark/decisive-comparison.yaml \
+  --spec config/benchmarks/decisive-comparison.yaml \
   --runs-root runs \
   --output runs/decisive-comparison-audit
 ```
@@ -142,18 +148,22 @@ These historical values guided configurations but must not be treated as paper c
 
 - [x] Complete and audit the 48-cell dense/selective CESTA matrix.
 - [x] Export classification, request, and TX+RX energy records and paired summaries.
-- [ ] Run all eight temporal families over four datasets and three seeds, yielding 96 unique cells from one commit.
+- [ ] Run all nine temporal families over four datasets and three seeds, yielding 108 unique cells from one commit.
 - [ ] Use validation macro-F1 checkpointing, early stopping with patience 10 and minimum improvement `1e-4`, and no post-test configuration changes.
 - [ ] Persist the validation-only family ranking before inspecting temporal test comparisons.
 - [ ] Audit temporal provenance and test support, lock the primary comparator, and report paired uncertainty against CESTA.
 - [ ] Publish one provisional comparison with the three-seed and missing-control limitations.
 
-Inspect the temporal matrix with the checked-in split-matched configurations before removing `--dry-run`:
+Inspect the temporal matrix with the checked-in default configurations before removing `--dry-run`:
 
 ```bash
 uv run python scripts/run_all_baselines.py \
   --runs-dir runs \
-  --configs config/model/diagnosis/split_matched/*.yaml \
+  --configs config/training/cnn-1d.yaml config/training/lstm.yaml \
+            config/training/gru.yaml config/training/transformer.yaml \
+            config/training/autoformer.yaml config/training/informer.yaml \
+            config/training/patch-tst.yaml config/training/modern-tcn.yaml \
+            config/training/hydra.yaml \
   --datasets data/datasets/Intel_fault05 data/datasets/Intel_fault10 \
              data/datasets/Intel_fault15 data/datasets/Intel_fault20 \
   --seeds 12 42 1242 \

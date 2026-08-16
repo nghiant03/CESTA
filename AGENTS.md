@@ -29,14 +29,18 @@ src/CESTA/
 ├── cli/             # Thin Typer wrappers
 ├── injection/       # Markov faults and injectors
 ├── datasets/        # Raw loaders and canonical artifacts
-├── models/          # Temporal and spatial models
+├── models/          # Temporal and spatial models, including portable Hydra
 ├── training/        # Trainer, objectives, losses, and callbacks
 ├── evaluation/      # Evaluation, communication, energy, and benchmarks
 ├── optimization/    # Optuna search
 ├── utils.py         # Git, environment, ID, time, and hashing helpers
 └── seed.py          # Reproducibility helper
 
-config/              # Data, model, diagnosis, and benchmark configs
+config/
+├── datasets/        # Dataset transformation and fault-injection configs
+├── training/        # Canonical model training configs
+├── experiments/     # Diagnosis ablations, controls, and sweeps
+└── benchmarks/      # Comparison and tuning-grid specifications
 docs/RESEARCH.md     # Consolidated research record
 firmware/             # ESP32-S3 Rust firmware
 notebooks/            # Analysis notebooks
@@ -84,6 +88,10 @@ runs/<model>/<run_id>/
 └── communication_metrics.json  # when applicable
 ```
 
+## Temporal models
+
+Hydra is implemented as a portable PyTorch quasiseparable bidirectional mixer under `models/temporal/hydra.py`. Keep its per-timestep head and `(batch, time, classes)` output contract; do not replace it with window-level pooling. It intentionally avoids the official CUDA-only kernel dependency so baseline training and artifact loading remain portable.
+
 ## CESTA model
 
 `CESTAClassifier` is under `models/spatial/cesta/` and accepts graph-aligned input `(batch, window, nodes * features)`. Modes are `none`, `dense`, `gumbel_request`, `random`, `static_topk`, and `local_change`.
@@ -99,19 +107,19 @@ The ESP32-S3 firmware lives under `firmware/`. `firmware/src/config.rs` selects 
 ## Commands
 
 ```bash
-uv run cesta transform intel_lab data/raw/Intel/data.txt data/datasets/intel_lab --config config/data/intel_fault15.yaml
-uv run cesta train config/model/lstm.yaml data/canon/intel_lab
+uv run cesta transform intel_lab data/raw/Intel/data.txt data/datasets/intel_lab --config config/datasets/intel-lab/fault-15.yaml
+uv run cesta train config/training/lstm.yaml data/canon/intel_lab
 uv run cesta evaluate --model runs/lstm/<run_id> --data data/canon/intel_lab
 uv run cesta optimize --data data/canon/intel_lab --model lstm --n-trials 20 --epochs 10
 
 uv run python scripts/run_all_baselines.py --dry-run
-uv run python scripts/audit_decisive_comparison.py --spec config/benchmark/decisive-comparison.yaml --runs-root runs --output runs/decisive-comparison-audit --allow-incomplete
+uv run python scripts/audit_decisive_comparison.py --spec config/benchmarks/decisive-comparison.yaml --runs-root runs --output runs/decisive-comparison-audit --allow-incomplete
 uv run python scripts/summarize_decisive_comparison.py --runs-csv runs/decisive-comparison-audit/runs.csv --output runs/decisive-comparison-summary --comparison <variant> <locked-reference>
-uv run python scripts/generate_control_tuning.py --spec config/benchmark/control-tuning.yaml --output runs/control-tuning/generated
+uv run python scripts/generate_control_tuning.py --spec config/benchmarks/control-tuning.yaml --output runs/control-tuning/generated
 uv run python scripts/derive_control_budgets.py --runs-csv <validation-runs.csv> --source-variant <variant> --output runs/control-tuning/control-budgets.yaml
 uv run python scripts/lock_control_policies.py --budgets <budgets.yaml> --validation-runs-csv <validation-runs.csv> --controller <control> <variants...> --output runs/control-tuning/control-lock.yaml
 uv run python scripts/audit_locked_controls.py --lock <control-lock.yaml> --test-runs-csv <test-runs.csv> --output runs/control-locked-audit
 uv run python scripts/audit_validation_logit_sensitivity.py --model <run> --data <dataset>
 ```
 
-The baseline runner reconciles completed cells from manifests and resolved configs. Use split-matched diagnosis configs for direct CESTA accuracy claims; legacy `80/10/10` runs are descriptive only. The benchmark auditor rejects missing, duplicate, inconsistent, or incomparable cells without selecting by test performance.
+The baseline runner reconciles completed cells from manifests and resolved configs. All default model configs use the connectivity-chronological `70/15/15` split for direct CESTA accuracy comparisons; historical `80/10/10` runs are descriptive only. The benchmark auditor rejects missing, duplicate, inconsistent, or incomparable cells without selecting by test performance.
