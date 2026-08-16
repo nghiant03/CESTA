@@ -19,16 +19,17 @@ from CESTA.schema.config import load_config_file
 from CESTA.utils import sha256_file
 
 DEFAULT_CONFIGS = (
-    Path("config/model/cnn1d.yaml"),
-    Path("config/model/lstm.yaml"),
-    Path("config/model/gru.yaml"),
-    Path("config/model/transformer.yaml"),
-    Path("config/model/autoformer.yaml"),
-    Path("config/model/informer.yaml"),
-    Path("config/model/patchtst.yaml"),
-    Path("config/model/modern_tcn.yaml"),
-    Path("config/model/stgcn.yaml"),
-    Path("config/model/cesta.yaml"),
+    Path("config/training/cnn-1d.yaml"),
+    Path("config/training/lstm.yaml"),
+    Path("config/training/gru.yaml"),
+    Path("config/training/transformer.yaml"),
+    Path("config/training/autoformer.yaml"),
+    Path("config/training/informer.yaml"),
+    Path("config/training/patch-tst.yaml"),
+    Path("config/training/modern-tcn.yaml"),
+    Path("config/training/hydra.yaml"),
+    Path("config/training/st-gcn.yaml"),
+    Path("config/training/cesta.yaml"),
 )
 DEFAULT_DATASETS = (
     Path("data/datasets/Intel_fault05"),

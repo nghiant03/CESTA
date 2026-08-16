@@ -1,0 +1,23 @@
+datasets:
+  - name: Intel_fault05
+    path: data/datasets/Intel_fault05
+  - name: Intel_fault10
+    path: data/datasets/Intel_fault10
+  - name: Intel_fault15
+    path: data/datasets/Intel_fault15
+  - name: Intel_fault20
+    path: data/datasets/Intel_fault20
+seeds: [12, 42, 1242]
+variants:
+  - name: cesta_dense_crf0p05
+    config: config/experiments/diagnosis/graph-fusion/cesta-dense-residual0p1-logit-correction-crf-w0p05-capmatch.yaml
+    communication_mode: dense
+  - name: cesta_selective_p1e-3
+    config: config/experiments/diagnosis/graph-fusion/cesta-gumbel-residual0p1-logit-correction-crf-w0p05-penalty1em03-capmatch.yaml
+    communication_mode: gumbel_request
+  - name: cesta_selective_p1e-3_commcond
+    config: config/experiments/diagnosis/graph-fusion/cesta-gumbel-residual0p1-logit-correction-crf-w0p05-penalty1em03-comm-conditioned-correction-capmatch.yaml
+    communication_mode: gumbel_request
+  - name: cesta_lowbit_p1e-2_commcond_voi
+    config: config/experiments/diagnosis/graph-fusion/cesta-gumbel-residual0p1-logit-correction-crf-w0p05-penalty1em02-comm-conditioned-correction-voi-w0p1-capmatch.yaml
+    communication_mode: gumbel_request

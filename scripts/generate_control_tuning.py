@@ -14,7 +14,7 @@ from CESTA.schema.config import load_config_file
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Generate predefined validation-only control tuning configs and benchmark spec.")
-    parser.add_argument("--spec", type=Path, default=Path("config/benchmark/control-tuning.yaml"), help="Control tuning grid YAML.")
+    parser.add_argument("--spec", type=Path, default=Path("config/benchmarks/control-tuning.yaml"), help="Control tuning grid YAML.")
     parser.add_argument("--output", type=Path, required=True, help="Directory for generated configs and validation benchmark spec.")
     return parser.parse_args()
 

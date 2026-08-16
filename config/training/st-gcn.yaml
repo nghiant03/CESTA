@@ -8,9 +8,11 @@ train:
   focal_alpha: null
   oversample: true
   oversample_ratio: 0.53
-  features:
-  - temp
+  checkpoint_monitor: val_macro_f1
+  early_stopping_monitor: val_macro_f1
+  features: ["temp"]
   seed: 42
+
 data:
   window:
     window_size: 60
@@ -18,10 +20,11 @@ data:
     test_stride: 60
   split:
     strategy: connectivity-chronological
-    train_ratio: 0.8
-    val_ratio: 0.1
-    test_ratio: 0.1
+    train_ratio: 0.7
+    val_ratio: 0.15
+    test_ratio: 0.15
     tolerance: 0.05
+
 model_kwargs:
   st_hidden: 128
   num_st_blocks: 2
