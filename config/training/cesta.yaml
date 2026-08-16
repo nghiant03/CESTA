@@ -8,11 +8,11 @@ train:
   focal_alpha: null
   oversample: false
   oversample_ratio: 1.0
-  communication_penalty_weight: 0.0
+  communication_penalty_weight: 0.001
   communication_penalty_mode: budget_hinge
   target_request_ratio: 0.3
-  gate_entropy_weight: 0.0
-  crf_loss_weight: 0.3
+  gate_entropy_weight: 0.001
+  crf_loss_weight: 0.05
   gumbel_tau_start: 1.0
   gumbel_tau_end: 0.5
   gumbel_tau_anneal_epochs: 50
@@ -36,7 +36,7 @@ model_kwargs:
   hidden_size: 128
   num_layers: 2
   dropout: 0.2
-  communication_mode: dense
+  communication_mode: gumbel_request
   fusion_hidden_size: 64
   precision_bits: 32
   gumbel_temperature: 1.0
