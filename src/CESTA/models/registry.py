@@ -15,6 +15,7 @@ from CESTA.models.temporal import (
     AutoformerClassifier,
     CNN1DClassifier,
     GRUClassifier,
+    HydraClassifier,
     InformerClassifier,
     LSTMClassifier,
     ModernTCNClassifier,
@@ -167,6 +168,7 @@ register_model("transformer", TransformerClassifier)
 register_model("informer", InformerClassifier)
 register_model("patchtst", PatchTSTClassifier)
 register_model("modern_tcn", ModernTCNClassifier)
+register_model("hydra", HydraClassifier)
 register_model("stgcn", STGCNClassifier)
 register_model("cesta", CESTAClassifier)
 register_model("cnn1d", CNN1DClassifier)

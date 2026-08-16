@@ -4,7 +4,7 @@ This module provides model architectures and a registry system for
 managing different model implementations.
 
 Subpackages:
-    temporal/  - CNN1D, LSTM, GRU, Transformer, Autoformer, Informer, PatchTST, ModernTCN
+    temporal/  - Temporal sequence classifiers
     spatial/   - CESTA, ST-GCN
 """
 
@@ -21,6 +21,7 @@ from CESTA.models.temporal import (
     AutoformerClassifier,
     CNN1DClassifier,
     GRUClassifier,
+    HydraClassifier,
     InformerClassifier,
     LSTMClassifier,
     ModernTCNClassifier,
@@ -34,6 +35,7 @@ __all__ = [
     "CESTAClassifier",
     "CNN1DClassifier",
     "GRUClassifier",
+    "HydraClassifier",
     "InformerClassifier",
     "LSTMClassifier",
     "ModernTCNClassifier",
