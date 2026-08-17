@@ -29,6 +29,7 @@ DEFAULT_CONFIGS = (
     Path("config/training/modern-tcn.yaml"),
     Path("config/training/hydra.yaml"),
     Path("config/training/st-gcn.yaml"),
+    Path("config/training/hifinet.yaml"),
     Path("config/training/cesta.yaml"),
 )
 DEFAULT_DATASETS = (

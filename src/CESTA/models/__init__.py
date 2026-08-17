@@ -5,7 +5,7 @@ managing different model implementations.
 
 Subpackages:
     temporal/  - Temporal sequence classifiers
-    spatial/   - CESTA, ST-GCN
+    spatial/   - CESTA, HiFiNet, ST-GCN
 """
 
 from CESTA.models.base import BaseModel
@@ -16,7 +16,7 @@ from CESTA.models.registry import (
     list_models,
     register_model,
 )
-from CESTA.models.spatial import CESTAClassifier, STGCNClassifier
+from CESTA.models.spatial import CESTAClassifier, HiFiNetClassifier, STGCNClassifier
 from CESTA.models.temporal import (
     AutoformerClassifier,
     CNN1DClassifier,
@@ -35,6 +35,7 @@ __all__ = [
     "CESTAClassifier",
     "CNN1DClassifier",
     "GRUClassifier",
+    "HiFiNetClassifier",
     "HydraClassifier",
     "InformerClassifier",
     "LSTMClassifier",

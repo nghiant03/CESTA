@@ -182,7 +182,7 @@ Stop and investigate if a run is dirty, uses a different commit or dataset hash,
 
 ### P1: coverage and paper readiness
 
-- [ ] Reproduce HiFiNet if directly applicable; otherwise document the precise task or input mismatch.
+- [x] Adapt HiFiNet as a dense LSTM-GAT spatial baseline with per-timestep labels, canonical graph masks, and the locked cohort protocol.
 - [ ] Keep dynamic ST-GCN as diagnostic evidence, not the sole spatial comparator.
 - [ ] Verify accuracy uplift, dense-energy Pareto superiority, and learned-gating superiority separately.
 - [ ] Report class-level failures and measure model size, parameter count, latency, and peak memory.

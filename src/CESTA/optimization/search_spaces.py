@@ -114,6 +114,17 @@ def _stgcn_space(trial: optuna.trial.Trial) -> dict[str, Any]:
     }
 
 
+def _hifinet_space(trial: optuna.trial.Trial) -> dict[str, Any]:
+    return {
+        "temporal_hidden_size": trial.suggest_categorical("temporal_hidden_size", [64, 128, 256]),
+        "embedding_size": trial.suggest_categorical("embedding_size", [32, 64, 128]),
+        "gat_hidden_size": trial.suggest_categorical("gat_hidden_size", [32, 64, 128]),
+        "gat_heads": trial.suggest_categorical("gat_heads", [1, 2, 4, 8]),
+        "num_gat_layers": trial.suggest_int("num_gat_layers", 1, 3),
+        "dropout": trial.suggest_float("dropout", 0.0, 0.4),
+    }
+
+
 _REGISTRY: dict[str, SearchSpaceFn] = {
     "lstm": _lstm_gru_space,
     "gru": _lstm_gru_space,
@@ -124,6 +135,7 @@ _REGISTRY: dict[str, SearchSpaceFn] = {
     "patchtst": _patchtst_space,
     "modern_tcn": _modern_tcn_space,
     "stgcn": _stgcn_space,
+    "hifinet": _hifinet_space,
 }
 
 
