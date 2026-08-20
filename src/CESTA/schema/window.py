@@ -28,10 +28,10 @@ class DataSplitConfig(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    strategy: Literal["chronological", "connectivity-chronological"] = "chronological"
-    train_ratio: float = Field(default=0.8, gt=0.0, lt=1.0)
-    val_ratio: float = Field(default=0.1, ge=0.0, lt=1.0)
-    test_ratio: float = Field(default=0.1, gt=0.0, lt=1.0)
+    strategy: Literal["connectivity-chronological"] = "connectivity-chronological"
+    train_ratio: float = Field(default=0.7, gt=0.0, lt=1.0)
+    val_ratio: float = Field(default=0.15, gt=0.0, lt=1.0)
+    test_ratio: float = Field(default=0.15, gt=0.0, lt=1.0)
     tolerance: float = Field(default=0.05, ge=0.0, lt=1.0)
 
     @model_validator(mode="after")
@@ -39,9 +39,6 @@ class DataSplitConfig(BaseModel):
         total = self.train_ratio + self.val_ratio + self.test_ratio
         if abs(total - 1.0) > 1e-6:
             msg = f"train_ratio + val_ratio + test_ratio must equal 1.0, got {total:.6f}"
-            raise ValueError(msg)
-        if self.strategy == "connectivity-chronological" and self.val_ratio <= 0.0:
-            msg = "connectivity-chronological requires val_ratio > 0.0"
             raise ValueError(msg)
         return self
 

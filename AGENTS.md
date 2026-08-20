@@ -55,6 +55,7 @@ runs/                 # Generated artifacts
 - Keep `artifacts.py` independent of models, training, evaluation, CLI, and workflows. It uses a structural checkpoint protocol.
 - Keep CLI modules thin. Cross-package train/evaluate behavior belongs in `workflows/`.
 - Prefer config-file-first command surfaces for large runtime settings; validate YAML/JSON directly into Pydantic models.
+- All active workflows use the connectivity-chronological `70/15/15` split; plain chronological and `80/10/10` splits are unsupported.
 
 ## Data
 

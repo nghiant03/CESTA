@@ -17,7 +17,6 @@ from CESTA.datasets.windowed import (
     WindowedSplits,
     collect_splits,
     create_windows_with_starts,
-    split_and_window,
     split_boundaries,
     validate_features,
 )
@@ -217,56 +216,11 @@ class CESTADataset:
         required_metadata: set[str] | None = None,
         split_bounds: tuple[int, int, int, int] | None = None,
     ) -> WindowedSplits:
+        if split_bounds is not None:
+            raise ValueError("Explicit split bounds are unsupported; use connectivity-chronological splitting")
         if required_metadata is not None and "graph" in required_metadata:
             return self._prepare_graph(window_config, split_config, features)
-        if split_config is not None and split_config.strategy == "connectivity-chronological":
-            return self._prepare_aligned_tabular(window_config, split_config, features, required_metadata)
-        return self._prepare_tabular(window_config, split_config, features, split_bounds)
-
-    def _prepare_tabular(
-        self,
-        window_config: WindowConfig | None,
-        split_config: DataSplitConfig | None,
-        features: list[str] | None,
-        split_bounds: tuple[int, int, int, int] | None = None,
-    ) -> WindowedSplits:
-        wc = window_config if window_config is not None else WindowConfig()
-        split = split_config if split_config is not None else DataSplitConfig()
-        if split.strategy != "chronological":
-            msg = f"Tabular preparation supports only chronological split strategy, got {split.strategy!r}"
-            raise ValueError(msg)
-        if split_bounds is not None and self.group_column in self.df.columns:
-            msg = "Global split bounds are only supported for a single time-aligned tabular block"
-            raise ValueError(msg)
-        selected_features = validate_features(features, self.feature_names)
-        train_X_parts: list[NDArray[np.float32]] = []
-        train_y_parts: list[NDArray[np.int32]] = []
-        val_X_parts: list[NDArray[np.float32]] = []
-        val_y_parts: list[NDArray[np.int32]] = []
-        test_X_parts: list[NDArray[np.float32]] = []
-        test_y_parts: list[NDArray[np.int32]] = []
-        groups = self.df.groupby(self.group_column) if self.group_column in self.df.columns else [(None, self.df)]
-        for _, group_df in groups:
-            group_features = group_df[selected_features].to_numpy(dtype=np.float32)
-            group_labels = group_df["fault_state"].to_numpy(dtype=np.int32)
-            X_tr, y_tr, X_va, y_va, X_te, y_te = split_and_window(group_features, group_labels, wc, split, split_bounds=split_bounds)
-            if len(X_tr) > 0:
-                train_X_parts.append(X_tr)
-                train_y_parts.append(y_tr)
-            if len(X_va) > 0:
-                val_X_parts.append(X_va)
-                val_y_parts.append(y_va)
-            if len(X_te) > 0:
-                test_X_parts.append(X_te)
-                test_y_parts.append(y_te)
-        X_train, y_train, X_val, y_val, X_test, y_test = collect_splits(
-            wc, len(selected_features), train_X_parts, train_y_parts, val_X_parts, val_y_parts, test_X_parts, test_y_parts
-        )
-        windowed = WindowedSplits(X_train=X_train, y_train=y_train, X_val=X_val, y_val=y_val, X_test=X_test, y_test=y_test)
-        if split_bounds is not None:
-            train_start, train_end, val_end, test_end = split_bounds
-            windowed.split_bounds = {"train": (train_start, train_end), "val": (train_end, val_end), "test": (val_end, test_end)}
-        return windowed
+        return self._prepare_aligned_tabular(window_config, split_config, features, required_metadata)
 
     def _prepare_graph(
         self,
@@ -275,7 +229,7 @@ class CESTADataset:
         features: list[str] | None,
     ) -> WindowedSplits:
         wc = window_config if window_config is not None else WindowConfig()
-        split = split_config if split_config is not None else DataSplitConfig(strategy="connectivity-chronological")
+        split = split_config if split_config is not None else DataSplitConfig()
         selected_features = validate_features(features, self.feature_names)
         if selected_features != ["temp"]:
             raise ValueError('Dynamic graph preparation currently supports only features=["temp"]')
@@ -348,7 +302,7 @@ class CESTADataset:
         required_metadata: set[str] | None,
     ) -> WindowedSplits:
         wc = window_config if window_config is not None else WindowConfig()
-        split = split_config if split_config is not None else DataSplitConfig(strategy="connectivity-chronological")
+        split = split_config if split_config is not None else DataSplitConfig()
         selected_features = validate_features(features, self.feature_names)
         df = self.df
         timestamps = sorted(df[self.timestamp_column].unique())
@@ -460,9 +414,6 @@ class CESTADataset:
     def _split_boundaries(
         self, num_timestamps: int, edge_mask: NDArray[np.bool_], wc: WindowConfig, split: DataSplitConfig
     ) -> tuple[int, int, int, int]:
-        target_train_end, target_val_end = split_boundaries(num_timestamps, split)
-        if split.strategy == "chronological":
-            return 0, target_train_end, target_val_end, num_timestamps
         active_timesteps = np.flatnonzero(edge_mask.any(axis=1))
         if len(active_timesteps) == 0:
             msg = "Unable to create connectivity-chronological graph split: no active graph edges were found."
