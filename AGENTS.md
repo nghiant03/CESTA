@@ -50,7 +50,7 @@ runs/                 # Generated artifacts
 ## Core contracts
 
 - Import configuration schemas from their domain modules under `schema/`; `schema/types.py` is a compatibility shim.
-- `GraphWindowBatch` in `batch.py` is the native graph runtime contract used by loaders, trainers, evaluators, ST-GCN, HiFiNet, and CESTA.
+- `GraphWindowBatch` in `batch.py` is the native graph runtime contract used by loaders, trainers, evaluators, ST-GCN, HiFiNet, DCRNN, and CESTA.
 - Import classification metrics from `CESTA.metrics`; `evaluation/metrics.py` is a compatibility shim.
 - Keep `artifacts.py` independent of models, training, evaluation, CLI, and workflows. It uses a structural checkpoint protocol.
 - Keep CLI modules thin. Cross-package train/evaluate behavior belongs in `workflows/`.

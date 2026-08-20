@@ -65,7 +65,7 @@ Use seeds `12`, `42`, and `1242`. Compare only runs with matching features, wind
 
 - All temporal families: CNN1D, LSTM, GRU, Transformer, Autoformer, Informer, PatchTST, ModernTCN, and Hydra.
 - Fixed CESTA temporal backbone without communication.
-- Dynamic ST-GCN and HiFiNet if it is applicable and reproducible.
+- Dynamic ST-GCN, dense HiFiNet, and DCRNN with dynamic graph masks.
 - Dense learned message passing over every available directed edge.
 - Static top-k connectivity, random communication, and entropy-, margin-, and local-change-based controllers at matched budgets.
 
@@ -183,6 +183,7 @@ Stop and investigate if a run is dirty, uses a different commit or dataset hash,
 ### P1: coverage and paper readiness
 
 - [x] Adapt HiFiNet as a dense LSTM-GAT spatial baseline with per-timestep labels, canonical graph masks, and the locked cohort protocol.
+- [x] Add DCRNN as a directed diffusion-recurrent spatial baseline with per-timestep labels and dynamic graph masks.
 - [ ] Keep dynamic ST-GCN as diagnostic evidence, not the sole spatial comparator.
 - [ ] Verify accuracy uplift, dense-energy Pareto superiority, and learned-gating superiority separately.
 - [ ] Report class-level failures and measure model size, parameter count, latency, and peak memory.

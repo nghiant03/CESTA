@@ -105,6 +105,19 @@ def _modern_tcn_space(trial: optuna.trial.Trial) -> dict[str, Any]:
     }
 
 
+def _hydra_space(trial: optuna.trial.Trial) -> dict[str, Any]:
+    return {
+        "d_model": trial.suggest_categorical("d_model", [32, 64, 128]),
+        "num_layers": trial.suggest_int("num_layers", 1, 3),
+        "d_state": trial.suggest_categorical("d_state", [32, 64, 128]),
+        "d_conv": trial.suggest_categorical("d_conv", [3, 5, 7]),
+        "expand": trial.suggest_categorical("expand", [1, 2]),
+        "head_dim": trial.suggest_categorical("head_dim", [16, 32]),
+        "num_groups": 1,
+        "dropout": trial.suggest_float("dropout", 0.0, 0.4),
+    }
+
+
 def _stgcn_space(trial: optuna.trial.Trial) -> dict[str, Any]:
     return {
         "st_hidden": trial.suggest_categorical("st_hidden", [32, 64, 128]),
@@ -125,6 +138,16 @@ def _hifinet_space(trial: optuna.trial.Trial) -> dict[str, Any]:
     }
 
 
+def _dcrnn_space(trial: optuna.trial.Trial) -> dict[str, Any]:
+    return {
+        "hidden_size": trial.suggest_categorical("hidden_size", [32, 64, 128]),
+        "num_layers": trial.suggest_int("num_layers", 1, 3),
+        "diffusion_steps": trial.suggest_int("diffusion_steps", 1, 3),
+        "bidirectional_diffusion": trial.suggest_categorical("bidirectional_diffusion", [False, True]),
+        "dropout": trial.suggest_float("dropout", 0.0, 0.4),
+    }
+
+
 _REGISTRY: dict[str, SearchSpaceFn] = {
     "lstm": _lstm_gru_space,
     "gru": _lstm_gru_space,
@@ -134,8 +157,10 @@ _REGISTRY: dict[str, SearchSpaceFn] = {
     "informer": _informer_space,
     "patchtst": _patchtst_space,
     "modern_tcn": _modern_tcn_space,
+    "hydra": _hydra_space,
     "stgcn": _stgcn_space,
     "hifinet": _hifinet_space,
+    "dcrnn": _dcrnn_space,
 }
 
 
