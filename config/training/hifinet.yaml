@@ -1,13 +1,13 @@
 train:
   model: hifinet
   epochs: 100
-  batch_size: 16
-  learning_rate: 0.001
+  batch_size: 32
+  learning_rate: 0.006
   use_focal_loss: true
-  focal_gamma: 2.5
+  focal_gamma: 0.66
   focal_alpha: null
   oversample: true
-  oversample_ratio: 0.53
+  oversample_ratio: 0.34
   checkpoint_monitor: val_macro_f1
   early_stopping_monitor: val_macro_f1
   features: ["temp"]
@@ -26,10 +26,10 @@ data:
     tolerance: 0.05
 
 model_kwargs:
-  temporal_hidden_size: 128
-  embedding_size: 64
+  temporal_hidden_size: 64
+  embedding_size: 128
   gat_hidden_size: 64
-  gat_heads: 8
-  num_gat_layers: 2
+  gat_heads: 4
+  num_gat_layers: 3
   classifier_hidden_sizes: [128, 64]
-  dropout: 0.2
+  dropout: 0.31

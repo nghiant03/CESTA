@@ -1,13 +1,13 @@
 train:
   model: hydra
   epochs: 100
-  batch_size: 64
-  learning_rate: 0.001
-  use_focal_loss: false
-  focal_gamma: 2.0
+  batch_size: 16
+  learning_rate: 0.0002
+  use_focal_loss: true
+  focal_gamma: 1.6
   focal_alpha: null
-  oversample: false
-  oversample_ratio: 1.0
+  oversample: true
+  oversample_ratio: 0.67
   checkpoint_monitor: val_macro_f1
   early_stopping_monitor: val_macro_f1
   features: ["temp"]
@@ -26,11 +26,11 @@ data:
     tolerance: 0.05
 
 model_kwargs:
-  d_model: 64
-  num_layers: 2
-  d_state: 64
-  d_conv: 7
+  d_model: 32
+  num_layers: 3
+  d_state: 128
+  d_conv: 5
   expand: 2
-  head_dim: 64
+  head_dim: 32
   num_groups: 1
-  dropout: 0.1
+  dropout: 0.13
