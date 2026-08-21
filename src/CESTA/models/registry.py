@@ -14,10 +14,8 @@ from CESTA.models.spatial import CESTAClassifier, DCRNNClassifier, HiFiNetClassi
 from CESTA.models.temporal import (
     AutoformerClassifier,
     CNN1DClassifier,
-    GRUClassifier,
     HydraClassifier,
     InformerClassifier,
-    LSTMClassifier,
     ModernTCNClassifier,
     PatchTSTClassifier,
     TransformerClassifier,
@@ -161,8 +159,6 @@ def is_registered(name: str) -> bool:
     return name in _REGISTRY
 
 
-register_model("lstm", LSTMClassifier)
-register_model("gru", GRUClassifier)
 register_model("autoformer", AutoformerClassifier)
 register_model("transformer", TransformerClassifier)
 register_model("informer", InformerClassifier)

@@ -22,8 +22,7 @@ uv run cesta --help
 uv run cesta transform intel_lab data/raw/Intel/data.txt data/canon/intel_lab \
   --config config/datasets/intel-lab/fault-15.yaml
 
-# Train temporal and communication-aware models
-uv run cesta train config/training/gru.yaml data/canon/intel_lab
+# Train the communication-aware CESTA model
 uv run cesta train config/training/cesta.yaml data/canon/intel_lab
 
 # Evaluate a run, or create validation-only tuning artifacts
@@ -36,7 +35,7 @@ Training is config-file-first. Default training configurations under `config/tra
 ## Capabilities
 
 - Markov injection of `SPIKE`, `DRIFT`, and `STUCK` sensor faults.
-- Temporal models: CNN1D, LSTM, GRU, Transformer, Autoformer, Informer, PatchTST, ModernTCN, and Hydra.
+- Temporal models: CNN1D, Transformer, Autoformer, Informer, PatchTST, ModernTCN, and Hydra.
 - Spatial models: dynamic ST-GCN, HiFiNet, DCRNN, and CESTA.
 - CESTA modes: no communication, dense communication, receiver-side Gumbel request gating, and random, static top-k, or local-change rule-based controls.
 - Canonical graph datasets with node masks, dynamic edge masks, node positions, and edge distances.

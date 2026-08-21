@@ -63,7 +63,7 @@ Use seeds `12`, `42`, and `1242`. Compare only runs with matching features, wind
 
 ### Baselines and controls
 
-- All temporal families: CNN1D, LSTM, GRU, Transformer, Autoformer, Informer, PatchTST, ModernTCN, and Hydra.
+- Temporal families: CNN1D, Transformer, Autoformer, Informer, PatchTST, ModernTCN, and Hydra.
 - Fixed CESTA temporal backbone without communication.
 - Dynamic ST-GCN, dense HiFiNet, and DCRNN with dynamic graph masks.
 - Dense learned message passing over every available directed edge.
@@ -71,7 +71,7 @@ Use seeds `12`, `42`, and `1242`. Compare only runs with matching features, wind
 
 Lock the primary temporal family without reading test metrics. Require all 12 dataset-and-seed cells, rank families by mean checkpoint validation macro-F1, then break exact ties by lower validation standard deviation, lower active parameter count, and lexical model name. Tune controller thresholds and communication budgets on validation data only. Match controls primarily by dataset-level mean TX+RX energy across seeds within the interval `[98%, 100%]` of the learned target. Among matched candidates select the highest validation macro-F1; otherwise report the nearest candidate below target as under-budget unmatched. Keep equal combined-controller weights fixed during the first threshold sweep.
 
-Hydra is the selected Mamba-family temporal comparator. It is the natural bidirectional extension of Mamba, was published at NeurIPS 2024, has official code, and preserves `(batch, time, hidden)` outputs needed for CESTA's offline per-timestep labels. Use its non-causal convolution and quasiseparable mixer with a per-timestep linear classification head; do not add global or adaptive temporal pooling. This makes the temporal context comparable to the existing bidirectional LSTM and GRU baselines. CESTA uses a portable PyTorch implementation of the published Hydra equations instead of the official CUDA-only fused kernels; validate numerical behavior and report measured latency rather than attributing official-kernel throughput to this implementation.
+Hydra is the selected Mamba-family temporal comparator. It is the natural bidirectional extension of Mamba, was published at NeurIPS 2024, has official code, and preserves `(batch, time, hidden)` outputs needed for CESTA's offline per-timestep labels. Use its non-causal convolution and quasiseparable mixer with a per-timestep linear classification head; do not add global or adaptive temporal pooling. CESTA uses a portable PyTorch implementation of the published Hydra equations instead of the official CUDA-only fused kernels; validate numerical behavior and report measured latency rather than attributing official-kernel throughput to this implementation.
 
 Mamba-2 remains the preferred causal ablation if online diagnosis becomes a separate research question, but it is not the primary offline comparator. MambaSL, accepted at ICLR 2026, is the strongest recent general time-series classification evidence, but its published task and adaptive pooling produce one label per window rather than one label per timestep. TSCMamba additionally introduces wavelet and multi-view feature engineering, which would confound a backbone comparison. At the decisive window length of 60, make no linear-time speed claim: the Mamba-2 paper reports its SSD speed crossover against FlashAttention-2 at length 2,000. Measure latency and peak memory instead.
 
@@ -123,17 +123,27 @@ uv run python scripts/summarize_decisive_comparison.py \
 
 Evidence is provisional until the full protocol is complete. The current 36-run selective snapshot covers four datasets and three seeds:
 
-| Variant | Runs | Macro-F1 mean±std | Accuracy mean±std | Request ratio | Bits | Δ vs legacy best temporal |
-|---|---:|---:|---:|---:|---:|---:|
-| CESTA selective, penalty `1e-3` | 12 | 0.8987±0.0248 | 0.9684±0.0115 | 0.439 | 197.5M | +0.0121 |
-| `1e-3` + communication-conditioned correction | 12 | 0.8986±0.0233 | 0.9683±0.0124 | 0.423 | 190.4M | +0.0119 |
-| `1e-2` + correction + VOI | 12 | 0.8922±0.0256 | 0.9666±0.0104 | 0.274 | 123.3M | +0.0056 |
+| Variant | Runs | Macro-F1 mean±std | Accuracy mean±std | Request ratio | Bits |
+|---|---:|---:|---:|---:|---:|
+| CESTA selective, penalty `1e-3` | 12 | 0.8987±0.0248 | 0.9684±0.0115 | 0.439 | 197.5M |
+| `1e-3` + communication-conditioned correction | 12 | 0.8986±0.0233 | 0.9683±0.0124 | 0.423 | 190.4M |
+| `1e-2` + correction + VOI | 12 | 0.8922±0.0256 | 0.9666±0.0104 | 0.274 | 123.3M |
 
 These comparisons use legacy temporal references and are not eligible for the final paired accuracy claim. The strict artifact audit validates all 48 dense and selective CESTA cells and confirms serialized selective TX+RX energy savings relative to dense CESTA, but budget-matched controls are absent.
 
+The available three-seed test accuracies are summarized below. Each dataset cell is the arithmetic mean across seeds `12`, `42`, and `1242`; the aggregate row is the unweighted mean across all 12 available dataset-and-seed cells for that model. Temporal models use historical chronological `80/10/10` runs, ST-GCN uses historical connectivity-chronological `80/10/10` runs, and CESTA uses the audited default selective penalty-`1e-3` `70/15/15` variant. The split mismatch is accepted for this descriptive table only. An em dash means no evaluated artifact is available.
+
+| Dataset | CNN1D | Transformer | Autoformer | Informer | PatchTST | ModernTCN | Hydra | ST-GCN | HiFiNet | DCRNN | CESTA default |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| `fault05` | 0.9560 | 0.9683 | 0.9731 | 0.9650 | 0.9751 | 0.9746 | — | 0.9393 | — | — | 0.9802 |
+| `fault10` | 0.9341 | 0.9582 | 0.9533 | 0.9447 | 0.9539 | 0.9662 | — | 0.9211 | — | — | 0.9738 |
+| `fault15` | 0.9173 | 0.9395 | 0.9286 | 0.9104 | 0.9463 | 0.9498 | — | 0.8833 | — | — | 0.9683 |
+| `fault20` | 0.8875 | 0.9200 | 0.8936 | 0.8747 | 0.9305 | 0.9368 | — | 0.8292 | — | — | 0.9512 |
+| **Aggregate** | **0.9237** | **0.9465** | **0.9372** | **0.9237** | **0.9514** | **0.9569** | **—** | **0.8932** | **—** | **—** | **0.9684** |
+
 Historical single-seed `Intel_fault15` development established the following design choices:
 
-- Dense logit correction plus CRF loss weight `0.05` reached test macro-F1 `0.9225` versus same-split GRU `0.9018`.
+- Dense logit correction plus CRF loss weight `0.05` reached test macro-F1 `0.9225`.
 - Request penalty `1e-3` reached `0.9187` while reducing transmitted bits by `43.3%` against dense communication.
 - Request penalty `1e-2` reached `0.9165` with `67.4%` fewer bits.
 - Communication-conditioned correction preserved performance at penalty `1e-3` while reducing bits further.
@@ -148,7 +158,7 @@ These historical values guided configurations but must not be treated as paper c
 
 - [x] Complete and audit the 48-cell dense/selective CESTA matrix.
 - [x] Export classification, request, and TX+RX energy records and paired summaries.
-- [ ] Run all nine temporal families over four datasets and three seeds, yielding 108 unique cells from one commit.
+- [ ] Run all seven temporal families over four datasets and three seeds, yielding 84 unique cells from one commit.
 - [ ] Use validation macro-F1 checkpointing, early stopping with patience 10 and minimum improvement `1e-4`, and no post-test configuration changes.
 - [ ] Persist the validation-only family ranking before inspecting temporal test comparisons.
 - [ ] Audit temporal provenance and test support, lock the primary comparator, and report paired uncertainty against CESTA.
@@ -159,8 +169,7 @@ Inspect the temporal matrix with the checked-in default configurations before re
 ```bash
 uv run python scripts/run_all_baselines.py \
   --runs-dir runs \
-  --configs config/training/cnn-1d.yaml config/training/lstm.yaml \
-            config/training/gru.yaml config/training/transformer.yaml \
+  --configs config/training/cnn-1d.yaml config/training/transformer.yaml \
             config/training/autoformer.yaml config/training/informer.yaml \
             config/training/patch-tst.yaml config/training/modern-tcn.yaml \
             config/training/hydra.yaml \

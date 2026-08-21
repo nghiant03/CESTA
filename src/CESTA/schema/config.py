@@ -249,7 +249,7 @@ class OptimizeConfig(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    model: str = "lstm"
+    model: str = "cnn1d"
     n_trials: int = Field(default=20, ge=1)
     timeout: int | None = None
     seed: int = 42

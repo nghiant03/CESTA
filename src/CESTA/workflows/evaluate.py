@@ -35,7 +35,9 @@ def run_evaluation(model: Path, data: Path, config: EvaluateConfig, output: Path
 
     logger.info("Loading model from: {}", model)
     meta = load_checkpoint_metadata(model)
-    model_name = str(meta.get("model_name", "lstm"))
+    model_name = meta.get("model_name")
+    if not isinstance(model_name, str) or not model_name:
+        raise ValueError("Checkpoint metadata does not define model_name")
 
     train_cfg = meta.get("train_config")
     saved_features: list[str] | None = None

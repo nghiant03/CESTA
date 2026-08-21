@@ -61,7 +61,7 @@ runs/                 # Generated artifacts
 
 `CESTADataset` is the canonical post-transform artifact. A dataset requires `dataset.csv`, `dataset_meta.json`, `graph_edges.npz`, `dynamic_link_mask.npz`, `node_positions.json`, and `edge_distances.npz`; legacy names are unsupported.
 
-`CESTADataset.prepare()` returns `WindowedSplits`. Graph metadata travels in `WindowedSplits.metadata["graph"]`. Temporal models may request `node_identity`; graph models declare `required_metadata = {"graph"}`. `create_model()` validates requirements and extracts metadata-backed constructor arguments.
+`CESTADataset.prepare()` returns `WindowedSplits`. Graph metadata travels in `WindowedSplits.metadata["graph"]`. Graph models declare `required_metadata = {"graph"}`. `create_model()` validates requirements and extracts metadata-backed constructor arguments.
 
 `WindowedSplit.select()` must apply one index selection to every aligned field. Preserve missing nodes and unavailable links through node and edge masks. For non-graph models using `connectivity-chronological`, preserve the graph cohort's active communication block and split boundaries while dropping only incomplete node windows.
 
@@ -109,9 +109,9 @@ The ESP32-S3 firmware lives under `firmware/`. `firmware/src/config.rs` selects 
 
 ```bash
 uv run cesta transform intel_lab data/raw/Intel/data.txt data/datasets/intel_lab --config config/datasets/intel-lab/fault-15.yaml
-uv run cesta train config/training/lstm.yaml data/canon/intel_lab
-uv run cesta evaluate --model runs/lstm/<run_id> --data data/canon/intel_lab
-uv run cesta optimize --data data/canon/intel_lab --model lstm --n-trials 20 --epochs 10
+uv run cesta train config/training/cesta.yaml data/canon/intel_lab
+uv run cesta evaluate --model runs/cesta/<run_id> --data data/canon/intel_lab
+uv run cesta optimize --data data/canon/intel_lab --model cnn1d --n-trials 20 --epochs 10
 
 uv run python scripts/run_all_baselines.py --dry-run
 uv run python scripts/audit_decisive_comparison.py --spec config/benchmarks/decisive-comparison.yaml --runs-root runs --output runs/decisive-comparison-audit --allow-incomplete

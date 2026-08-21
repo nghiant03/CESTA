@@ -40,15 +40,6 @@ def suggest_train_hyperparams(trial: optuna.trial.Trial) -> dict[str, Any]:
     return overrides
 
 
-def _lstm_gru_space(trial: optuna.trial.Trial) -> dict[str, Any]:
-    return {
-        "hidden_size": trial.suggest_categorical("hidden_size", [32, 64, 128, 256]),
-        "num_layers": trial.suggest_int("num_layers", 1, 3),
-        "dropout": trial.suggest_float("dropout", 0.0, 0.5),
-        "bidirectional": trial.suggest_categorical("bidirectional", [False, True]),
-    }
-
-
 def _cnn1d_space(trial: optuna.trial.Trial) -> dict[str, Any]:
     return {
         "num_channels": trial.suggest_categorical("num_channels", [32, 64, 128]),
@@ -149,8 +140,6 @@ def _dcrnn_space(trial: optuna.trial.Trial) -> dict[str, Any]:
 
 
 _REGISTRY: dict[str, SearchSpaceFn] = {
-    "lstm": _lstm_gru_space,
-    "gru": _lstm_gru_space,
     "cnn1d": _cnn1d_space,
     "transformer": _transformer_space,
     "autoformer": _autoformer_space,

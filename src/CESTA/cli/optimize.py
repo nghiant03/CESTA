@@ -24,7 +24,7 @@ def optimize(
     model: Annotated[
         str,
         typer.Option("--model", "-m", help="Model architecture"),
-    ] = "lstm",
+    ] = "cnn1d",
     n_trials: Annotated[
         int,
         typer.Option("--n-trials", "-n", help="Number of trials"),

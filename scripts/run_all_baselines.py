@@ -20,8 +20,6 @@ from CESTA.utils import sha256_file
 
 DEFAULT_CONFIGS = (
     Path("config/training/cnn-1d.yaml"),
-    Path("config/training/lstm.yaml"),
-    Path("config/training/gru.yaml"),
     Path("config/training/transformer.yaml"),
     Path("config/training/autoformer.yaml"),
     Path("config/training/informer.yaml"),
