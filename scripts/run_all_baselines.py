@@ -28,6 +28,7 @@ DEFAULT_CONFIGS = (
     Path("config/training/hydra.yaml"),
     Path("config/training/st-gcn.yaml"),
     Path("config/training/hifinet.yaml"),
+    Path("config/training/hmct.yaml"),
     Path("config/training/dcrnn.yaml"),
     Path("config/training/cesta.yaml"),
 )

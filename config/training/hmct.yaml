@@ -1,0 +1,41 @@
+train:
+  model: hmct
+  epochs: 100
+  batch_size: 16
+  learning_rate: 0.0036
+  weight_decay: 0.01
+  use_focal_loss: true
+  focal_gamma: 0.81
+  focal_alpha: null
+  oversample: false
+  oversample_ratio: 1.0
+  checkpoint_monitor: val_macro_f1
+  early_stopping_monitor: val_macro_f1
+  features: ["temp"]
+  seed: 42
+
+data:
+  window:
+    window_size: 60
+    train_stride: 10
+    test_stride: 60
+  split:
+    strategy: connectivity-chronological
+    train_ratio: 0.7
+    val_ratio: 0.15
+    test_ratio: 0.15
+    tolerance: 0.05
+
+model_kwargs:
+  d_model: 32
+  cnn_channels: 128
+  num_cnn_blocks: 1
+  transformer_layers: 4
+  n_heads: 4
+  ff_mult: 2
+  kernel_sizes: [3, 5, 7]
+  dilations: [1, 2, 4]
+  large_dilations: [8, 16]
+  max_len: 60
+  causal: false
+  dropout: 0.002

@@ -29,7 +29,7 @@ src/CESTA/
 ├── cli/             # Thin Typer wrappers
 ├── injection/       # Markov faults and injectors
 ├── datasets/        # Raw loaders and canonical artifacts
-├── models/          # Temporal and spatial models, including portable Hydra
+├── models/          # Temporal and spatial models, including portable Hydra and HMCT
 ├── training/        # Trainer, objectives, losses, and callbacks
 ├── evaluation/      # Evaluation, communication, energy, and benchmarks
 ├── optimization/    # Optuna search
@@ -50,7 +50,7 @@ runs/                 # Generated artifacts
 ## Core contracts
 
 - Import configuration schemas from their domain modules under `schema/`; `schema/types.py` is a compatibility shim.
-- `GraphWindowBatch` in `batch.py` is the native graph runtime contract used by loaders, trainers, evaluators, ST-GCN, HiFiNet, DCRNN, and CESTA.
+- `GraphWindowBatch` in `batch.py` is the native graph runtime contract used by loaders, trainers, evaluators, ST-GCN, HiFiNet, HMCT, DCRNN, and CESTA.
 - Import classification metrics from `CESTA.metrics`; `evaluation/metrics.py` is a compatibility shim.
 - Keep `artifacts.py` independent of models, training, evaluation, CLI, and workflows. It uses a structural checkpoint protocol.
 - Keep CLI modules thin. Cross-package train/evaluate behavior belongs in `workflows/`.
@@ -92,6 +92,10 @@ runs/<model>/<run_id>/
 ## Temporal models
 
 Hydra is implemented as a portable PyTorch quasiseparable bidirectional mixer under `models/temporal/hydra.py`. Keep its per-timestep head and `(batch, time, classes)` output contract; do not replace it with window-level pooling. It intentionally avoids the official CUDA-only kernel dependency so baseline training and artifact loading remain portable.
+
+## HMCT model
+
+HMCT is implemented under `models/spatial/hmct.py` as independent per-node temporal diagnosis using first differences, residual multi-scale dilated convolutions, sinusoidal position encoding, and a Transformer encoder. It preserves CESTA's `(batch, time, nodes, classes)` graph-model output contract but does not perform graph message passing.
 
 ## CESTA model
 

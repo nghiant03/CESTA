@@ -10,7 +10,7 @@ import inspect
 from typing import Any
 
 from CESTA.models.base import BaseModel
-from CESTA.models.spatial import CESTAClassifier, DCRNNClassifier, HiFiNetClassifier, STGCNClassifier
+from CESTA.models.spatial import CESTAClassifier, DCRNNClassifier, HiFiNetClassifier, HMCTClassifier, STGCNClassifier
 from CESTA.models.temporal import (
     AutoformerClassifier,
     CNN1DClassifier,
@@ -167,6 +167,7 @@ register_model("modern_tcn", ModernTCNClassifier)
 register_model("hydra", HydraClassifier)
 register_model("stgcn", STGCNClassifier)
 register_model("hifinet", HiFiNetClassifier)
+register_model("hmct", HMCTClassifier)
 register_model("dcrnn", DCRNNClassifier)
 register_model("cesta", CESTAClassifier)
 register_model("cnn1d", CNN1DClassifier)

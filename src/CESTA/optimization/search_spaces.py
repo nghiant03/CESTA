@@ -129,6 +129,22 @@ def _hifinet_space(trial: optuna.trial.Trial) -> dict[str, Any]:
     }
 
 
+def _hmct_space(trial: optuna.trial.Trial) -> dict[str, Any]:
+    n_heads = trial.suggest_categorical("n_heads", [2, 4, 8])
+    d_model = trial.suggest_categorical("d_model", [32, 64, 128])
+    if d_model % n_heads != 0:
+        raise optuna.TrialPruned(f"d_model={d_model} not divisible by n_heads={n_heads}")
+    return {
+        "d_model": d_model,
+        "cnn_channels": trial.suggest_categorical("cnn_channels", [32, 64, 128]),
+        "num_cnn_blocks": trial.suggest_int("num_cnn_blocks", 1, 3),
+        "transformer_layers": trial.suggest_int("transformer_layers", 1, 4),
+        "n_heads": n_heads,
+        "ff_mult": trial.suggest_categorical("ff_mult", [2, 4]),
+        "dropout": trial.suggest_float("dropout", 0.0, 0.4),
+    }
+
+
 def _dcrnn_space(trial: optuna.trial.Trial) -> dict[str, Any]:
     return {
         "hidden_size": trial.suggest_categorical("hidden_size", [32, 64, 128]),
@@ -149,6 +165,7 @@ _REGISTRY: dict[str, SearchSpaceFn] = {
     "hydra": _hydra_space,
     "stgcn": _stgcn_space,
     "hifinet": _hifinet_space,
+    "hmct": _hmct_space,
     "dcrnn": _dcrnn_space,
 }
 

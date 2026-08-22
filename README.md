@@ -36,7 +36,7 @@ Training is config-file-first. Default training configurations under `config/tra
 
 - Markov injection of `SPIKE`, `DRIFT`, and `STUCK` sensor faults.
 - Temporal models: CNN1D, Transformer, Autoformer, Informer, PatchTST, ModernTCN, and Hydra.
-- Spatial models: dynamic ST-GCN, HiFiNet, DCRNN, and CESTA.
+- Spatial models: dynamic ST-GCN, HiFiNet, HMCT, DCRNN, and CESTA.
 - CESTA modes: no communication, dense communication, receiver-side Gumbel request gating, and random, static top-k, or local-change rule-based controls.
 - Canonical graph datasets with node masks, dynamic edge masks, node positions, and edge distances.
 - Classification, communication, and theoretical TX+RX radio-energy metrics.
