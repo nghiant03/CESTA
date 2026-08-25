@@ -1,6 +1,7 @@
 mod config;
 mod dht;
 mod fault;
+mod inference;
 mod mqtt;
 mod wifi;
 
@@ -36,6 +37,20 @@ fn main() {
 
     let topic = format!("{}{}", config::MQTT_TOPIC_PREFIX, config::DEVICE_ID);
     let mut mqtt_client = mqtt::connect();
+    let mut classifier = if config::INFERENCE_ENABLED {
+        match inference::Classifier::new(config::INFERENCE_TENSOR_ARENA_BYTES) {
+            Ok(classifier) => {
+                info!("[INFERENCE] TensorFlow Lite model initialized");
+                Some(classifier)
+            }
+            Err(error) => {
+                log::error!("[INFERENCE] Initialization failed: {}", error);
+                None
+            }
+        }
+    } else {
+        None
+    };
 
     loop {
         match normal_dht_sensor.read(true) {
@@ -56,15 +71,38 @@ fn main() {
                     reading.humidity,
                     payload
                 );
+                if let Some(classifier) = classifier.as_mut()
+                    && let Some(result) = classifier.push_temperature(reading.temperature)
+                {
+                    match result {
+                        Ok(result) => info!(
+                            "[INFERENCE] class={} confidence={:.4} elapsed_ms={} scores={:?}",
+                            result.class, result.confidence, result.elapsed_ms, result.scores
+                        ),
+                        Err(error) => log::error!("[INFERENCE] Prediction failed: {}", error),
+                    }
+                }
                 let msg = serde_json::to_string(&payload).unwrap();
 
-                match mqtt_client.publish(&topic, esp_idf_svc::mqtt::client::QoS::AtLeastOnce, false, msg.as_bytes()) {
-                    Ok(message_id) => info!("[MQTT] publish queued message_id={} topic={} payload={}", message_id, topic, msg),
+                match mqtt_client.publish(
+                    &topic,
+                    esp_idf_svc::mqtt::client::QoS::AtLeastOnce,
+                    false,
+                    msg.as_bytes(),
+                ) {
+                    Ok(message_id) => info!(
+                        "[MQTT] publish queued message_id={} topic={} payload={}",
+                        message_id, topic, msg
+                    ),
                     Err(e) => log::error!("[MQTT] Publish failed: {:?}", e),
                 }
             }
             Err(e) => {
-                log::warn!("[DHT] path=normal gpio={} read failed: {:?}, skipping", config::DHT_PIN, e);
+                log::warn!(
+                    "[DHT] path=normal gpio={} read failed: {:?}, skipping",
+                    config::DHT_PIN,
+                    e
+                );
             }
         }
 
@@ -90,8 +128,16 @@ fn main() {
                     );
                     let msg = serde_json::to_string(&payload).unwrap();
 
-                    match mqtt_client.publish(&topic, esp_idf_svc::mqtt::client::QoS::AtLeastOnce, false, msg.as_bytes()) {
-                        Ok(message_id) => info!("[MQTT] publish queued message_id={} topic={} payload={}", message_id, topic, msg),
+                    match mqtt_client.publish(
+                        &topic,
+                        esp_idf_svc::mqtt::client::QoS::AtLeastOnce,
+                        false,
+                        msg.as_bytes(),
+                    ) {
+                        Ok(message_id) => info!(
+                            "[MQTT] publish queued message_id={} topic={} payload={}",
+                            message_id, topic, msg
+                        ),
                         Err(e) => log::error!("[MQTT] Publish failed: {:?}", e),
                     }
                 }

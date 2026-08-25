@@ -17,6 +17,9 @@ pub const DHT_PIN: i32 = 5;
 pub const SPIKE_DHT_PIN: i32 = 7;
 pub const SEND_INTERVAL_SECS: u64 = 3;
 
+pub const INFERENCE_ENABLED: bool = true;
+pub const INFERENCE_TENSOR_ARENA_BYTES: usize = 2 * 1024 * 1024;
+
 pub const NTP_SERVER: &str = "vn.pool.ntp.org";
 pub const NTP_SYNC_TIMEOUT_SECS: u64 = 5;
 pub const NTP_SYNC_POLL_MS: u64 = 500;

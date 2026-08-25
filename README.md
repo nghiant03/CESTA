@@ -133,9 +133,9 @@ runs/                 # Generated experiment artifacts
 
 ## Firmware
 
-The optional ESP32-S3 firmware reads DHT11 sensors, synchronizes time through the configured SNTP server, and publishes readings every 30 seconds to `cesta/readings/<device_id>`. Install `espup`, `espflash`, `ldproxy`, and ESP-IDF host dependencies, then configure WiFi, MQTT, device, pins, NTP timing, build tag, and `FAULT_CONFIG` in `firmware/src/config.rs`.
+The optional ESP32-S3 firmware reads DHT11 sensors, synchronizes time through the configured SNTP server, and publishes readings to `cesta/readings/<device_id>`. It embeds `firmware/model/model.tflite`, runs a six-class prediction after collecting each 60-sample temperature window, and logs the scores and inference time. Install `espup`, `espflash`, `ldproxy`, and ESP-IDF host dependencies, then configure WiFi, MQTT, device, pins, NTP timing, `INFERENCE_ENABLED`, the tensor-arena size, and `FAULT_CONFIG` in `firmware/src/config.rs`.
 
-Only normal and SPIKE profiles are implemented. SPIKE reads `SPIKE_DHT_PIN` and expects a MOSFET or open-drain transistor to disturb the sensor DATA line. `firmware/src/main.rs` must construct SNTP from `NTP_SERVER`, not `EspSntp::new_default()`.
+Inference uses Espressif's TensorFlow Lite Micro component and requires an ESP32-S3 board with octal PSRAM and at least 8 MB flash. Only normal and SPIKE profiles are implemented. SPIKE reads `SPIKE_DHT_PIN` and expects a MOSFET or open-drain transistor to disturb the sensor DATA line. `firmware/src/main.rs` must construct SNTP from `NTP_SERVER`, not `EspSntp::new_default()`.
 
 ```bash
 cd firmware

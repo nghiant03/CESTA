@@ -107,7 +107,7 @@ The model may expose communication statistics, soft receiver request probabiliti
 
 ## Firmware
 
-The ESP32-S3 firmware lives under `firmware/`. `firmware/src/config.rs` selects normal or SPIKE profiles; SPIKE reads `SPIKE_DHT_PIN` and expects an external DATA-line disturbance. `main.rs` must construct SNTP from `NTP_SERVER`, not `EspSntp::new_default()`. Build and deployment commands are in `README.md`.
+The ESP32-S3 firmware lives under `firmware/`. It embeds `firmware/model/model.tflite` and calls Espressif TensorFlow Lite Micro through the `components/cesta_tflite` C++ bridge; the model consumes 60 scalar temperature samples and returns six scores. Inference requires octal PSRAM and 8 MB flash settings from `sdkconfig.defaults`. `firmware/src/config.rs` selects normal or SPIKE profiles; SPIKE reads `SPIKE_DHT_PIN` and expects an external DATA-line disturbance. `main.rs` must construct SNTP from `NTP_SERVER`, not `EspSntp::new_default()`. Build and deployment commands are in `README.md`.
 
 ## Commands
 
