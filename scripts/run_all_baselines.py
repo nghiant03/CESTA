@@ -3,13 +3,16 @@ from __future__ import annotations
 import argparse
 import copy
 import json
+import os
 import shutil
+import signal
 import subprocess
 import sys
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from types import FrameType
 from typing import Any
 
 import yaml
@@ -66,8 +69,36 @@ class BaselineTask:
         }
 
 
+@dataclass
+class RunningTask:
+    task: BaselineTask
+    process: subprocess.Popen[bytes]
+    gpu: str
+    started_at: str
+    started: float
+    position: int
+
+
 def utc_now() -> str:
     return datetime.now(UTC).isoformat(timespec="seconds").replace("+00:00", "Z")
+
+
+def raise_keyboard_interrupt(_signum: int, _frame: FrameType | None) -> None:
+    raise KeyboardInterrupt
+
+
+def resolve_gpu_ids(num_gpus: int) -> list[str]:
+    if num_gpus < 1:
+        msg = "--num-gpus must be at least 1"
+        raise ValueError(msg)
+    visible_devices = os.environ.get("CUDA_VISIBLE_DEVICES")
+    if visible_devices is None:
+        return [str(index) for index in range(num_gpus)]
+    gpu_ids = [gpu_id.strip() for gpu_id in visible_devices.split(",") if gpu_id.strip()]
+    if len(gpu_ids) < num_gpus:
+        msg = f"--num-gpus={num_gpus} exceeds the {len(gpu_ids)} devices in CUDA_VISIBLE_DEVICES"
+        raise ValueError(msg)
+    return gpu_ids[:num_gpus]
 
 
 def parse_args() -> argparse.Namespace:
@@ -77,6 +108,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--datasets", nargs="+", type=Path, default=list(DEFAULT_DATASETS), help="Canonical CESTA dataset directories to train on.")
     parser.add_argument("--seeds", nargs="+", type=int, default=list(DEFAULT_SEEDS), help="Seeds to run for each config/dataset pair.")
     parser.add_argument("--runner", nargs="+", default=["uv", "run", "cesta"], help="Command prefix used to invoke the CESTA CLI.")
+    parser.add_argument("--num-gpus", type=int, default=1, help="Number of visible GPUs to use, with one independent training run per GPU.")
     parser.add_argument("--early-stopping", action="store_true", help="Forward --early-stopping to cesta train.")
     parser.add_argument("--no-test-evaluation", action="store_true", help="Train and checkpoint using validation data without evaluating test data.")
     parser.add_argument("--restart", action="store_true", help="Ignore existing progress state and start from scratch.")
@@ -259,36 +291,38 @@ def prepare_temp_config(config_path: Path, seed: int, temp_dir: Path) -> Path:
     return temp_path
 
 
-def run_command(command: list[str]) -> int:
-    process = subprocess.Popen(command)
-    try:
-        return process.wait()
-    except KeyboardInterrupt:
-        process.terminate()
-        try:
-            process.wait(timeout=20)
-        except subprocess.TimeoutExpired:
-            process.kill()
-            process.wait()
-        raise
-
-
-def run_task(
+def start_task(
     task: BaselineTask,
     temp_config: Path,
     runs_dir: Path,
     runner: list[str],
     early_stopping: bool,
+    gpu: str,
     test_evaluation: bool = True,
-) -> int:
+) -> subprocess.Popen[bytes]:
     output_root = runs_dir / task.model
     command = [*runner, "train", str(temp_config), str(task.dataset_path), "--output", str(output_root)]
     if early_stopping:
         command.append("--early-stopping")
     if not test_evaluation:
         command.append("--no-test-evaluation")
-    print("Running:", " ".join(command), flush=True)
-    return run_command(command)
+    environment = os.environ.copy()
+    environment["CUDA_VISIBLE_DEVICES"] = str(gpu)
+    print(f"GPU {gpu} running:", " ".join(command), flush=True)
+    return subprocess.Popen(command, env=environment, start_new_session=True)
+
+
+def terminate_processes(running: dict[str, RunningTask]) -> None:
+    for active in running.values():
+        if active.process.poll() is None:
+            os.killpg(active.process.pid, signal.SIGTERM)
+    deadline = time.monotonic() + 20
+    while any(active.process.poll() is None for active in running.values()) and time.monotonic() < deadline:
+        time.sleep(0.2)
+    for active in running.values():
+        if active.process.poll() is None:
+            os.killpg(active.process.pid, signal.SIGKILL)
+        active.process.wait()
 
 
 def cleanup_progress(paths: list[Path], temp_dir: Path) -> None:
@@ -299,6 +333,7 @@ def cleanup_progress(paths: list[Path], temp_dir: Path) -> None:
 
 def main() -> int:
     args = parse_args()
+    gpu_ids = resolve_gpu_ids(args.num_gpus)
     runs_dir = args.runs_dir
     state_path = runs_dir / "baseline_sweep_state.json"
     events_path = runs_dir / "baseline_sweep_events.jsonl"
@@ -313,12 +348,14 @@ def main() -> int:
 
     if args.dry_run:
         print(f"Planned runs: {len(tasks)} | already completed: {len(tasks) - len(remaining)} | remaining: {len(remaining)}")
+        print(f"GPU workers: {args.num_gpus}")
         print(f"Progress state: {state_path}")
         if remaining:
             next_task = remaining[0]
             print(f"Next run: {next_task.model} {next_task.dataset_path.name} seed={next_task.seed}")
         return 0
 
+    progress["current"] = []
     write_progress(state_path, progress)
     print(f"Progress state: {state_path}", flush=True)
     print(f"Progress events: {events_path}", flush=True)
@@ -331,44 +368,103 @@ def main() -> int:
             print("All runs already completed.", flush=True)
         return 0
 
-    for task in remaining:
-        completed_count = len(progress["completed"])
-        record = task.as_record()
-        progress["current"] = record | {"started_at": utc_now(), "position": completed_count + 1}
+    pending = iter(remaining)
+    running: dict[str, RunningTask] = {}
+    next_position = len(progress["completed"]) + 1
+    signal.signal(signal.SIGTERM, raise_keyboard_interrupt)
+
+    def write_active_progress() -> None:
+        progress["current"] = [
+            active.task.as_record()
+            | {"gpu": active.gpu, "position": active.position, "started_at": active.started_at}
+            for active in sorted(running.values(), key=lambda item: item.gpu)
+        ]
         progress["updated_at"] = utc_now()
         write_progress(state_path, progress)
-        append_event(events_path, {"event": "start", "at": utc_now(), "completed": completed_count, "total": len(tasks), **record})
-        print(f"[{completed_count + 1}/{len(tasks)}] {task.model} {task.dataset_path.name} seed={task.seed}", flush=True)
 
-        temp_config = prepare_temp_config(task.config_path, task.seed, temp_dir)
-        started = time.perf_counter()
-        returncode = run_task(
+    def launch(gpu: str, task: BaselineTask, position: int) -> None:
+        record = task.as_record()
+        started_at = utc_now()
+        temp_config = prepare_temp_config(task.config_path, task.seed, temp_dir / f"gpu-{gpu}")
+        process = start_task(
             task,
             temp_config,
             runs_dir,
             args.runner,
             args.early_stopping,
+            gpu,
             test_evaluation=not args.no_test_evaluation,
         )
-        duration = time.perf_counter() - started
-        finished_at = utc_now()
+        running[gpu] = RunningTask(
+            task=task,
+            process=process,
+            gpu=gpu,
+            started_at=started_at,
+            started=time.perf_counter(),
+            position=position,
+        )
+        append_event(
+            events_path,
+            {"event": "start", "at": started_at, "completed": len(progress["completed"]), "total": len(tasks), "gpu": gpu, **record},
+        )
+        print(f"[{position}/{len(tasks)}] GPU {gpu}: {task.model} {task.dataset_path.name} seed={task.seed}", flush=True)
 
-        if returncode != 0:
-            failure = record | {"returncode": returncode, "failed_at": finished_at, "duration_seconds": duration}
-            progress["failures"].append(failure)
-            progress["current"] = None
-            progress["updated_at"] = finished_at
-            write_progress(state_path, progress)
-            append_event(events_path, {"event": "failure", "at": finished_at, **failure})
-            print(f"Failed with return code {returncode}. Resume with the same command after fixing the issue.", file=sys.stderr, flush=True)
-            return returncode
+    try:
+        for gpu in gpu_ids:
+            task = next(pending, None)
+            if task is None:
+                break
+            launch(gpu, task, next_position)
+            next_position += 1
+        write_active_progress()
 
-        success = record | {"completed_at": finished_at, "duration_seconds": duration}
-        progress["completed"][task.key] = success
-        progress["current"] = None
-        progress["updated_at"] = finished_at
-        write_progress(state_path, progress)
-        append_event(events_path, {"event": "success", "at": finished_at, "completed": len(progress["completed"]), "total": len(tasks), **success})
+        while running:
+            finished_gpu = next((gpu for gpu, active in running.items() if active.process.poll() is not None), None)
+            if finished_gpu is None:
+                time.sleep(0.5)
+                continue
+            active = running.pop(finished_gpu)
+            returncode = active.process.returncode
+            duration = time.perf_counter() - active.started
+            finished_at = utc_now()
+            record = active.task.as_record()
+
+            if returncode != 0:
+                failure = record | {
+                    "gpu": active.gpu,
+                    "returncode": returncode,
+                    "failed_at": finished_at,
+                    "duration_seconds": duration,
+                }
+                progress["failures"].append(failure)
+                append_event(events_path, {"event": "failure", "at": finished_at, **failure})
+                terminate_processes(running)
+                for interrupted in running.values():
+                    append_event(events_path, {"event": "interrupted", "at": utc_now(), "gpu": interrupted.gpu, **interrupted.task.as_record()})
+                running.clear()
+                write_active_progress()
+                print(f"Failed with return code {returncode}. Resume with the same command after fixing the issue.", file=sys.stderr, flush=True)
+                return returncode
+
+            success = record | {"gpu": active.gpu, "completed_at": finished_at, "duration_seconds": duration}
+            progress["completed"][active.task.key] = success
+            append_event(
+                events_path,
+                {"event": "success", "at": finished_at, "completed": len(progress["completed"]), "total": len(tasks), **success},
+            )
+            task = next(pending, None)
+            if task is not None:
+                launch(finished_gpu, task, next_position)
+                next_position += 1
+            write_active_progress()
+    except KeyboardInterrupt:
+        terminate_processes(running)
+        for interrupted in running.values():
+            append_event(events_path, {"event": "interrupted", "at": utc_now(), "gpu": interrupted.gpu, **interrupted.task.as_record()})
+        running.clear()
+        write_active_progress()
+        print("Sweep interrupted. Resume with the same command.", file=sys.stderr, flush=True)
+        return 130
 
     if not args.keep_progress_log:
         cleanup_progress([state_path, events_path], temp_dir)

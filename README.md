@@ -32,6 +32,14 @@ uv run cesta evaluate --model runs/cesta/<run_id> --data data/canon/intel_lab --
 
 Training is config-file-first. Default training configurations under `config/training/` use the connectivity-chronological `70/15/15` split; diagnosis studies live under `config/experiments/`, and comparison specifications live under `config/benchmarks/`. Use `uv run cesta <command> --help` for all command options. Hydra uses a portable PyTorch implementation of the published bidirectional quasiseparable mixer, so it runs through the standard environment without requiring the official CUDA-only kernel package.
 
+Run independent baseline tasks concurrently across visible GPUs with:
+
+```bash
+uv run python scripts/run_all_baselines.py --num-gpus 4 --keep-progress-log
+```
+
+Each GPU receives one training process. Interrupt with `Ctrl-C` and rerun the same command to resume from completed manifests; interrupted tasks restart from the beginning. Set `CUDA_VISIBLE_DEVICES` before the command to select specific GPUs. Use `--restart` only to ignore completed runs intentionally.
+
 ## Capabilities
 
 - Markov injection of `SPIKE`, `DRIFT`, and `STUCK` sensor faults.
