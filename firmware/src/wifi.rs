@@ -1,7 +1,7 @@
-use esp_idf_svc::wifi::{BlockingWifi, ClientConfiguration, Configuration, EspWifi};
+use esp_idf_hal::modem::Modem;
 use esp_idf_svc::eventloop::EspSystemEventLoop;
 use esp_idf_svc::nvs::EspDefaultNvsPartition;
-use esp_idf_hal::modem::Modem;
+use esp_idf_svc::wifi::{BlockingWifi, ClientConfiguration, Configuration, EspWifi};
 use log::info;
 
 use crate::config;
@@ -43,11 +43,7 @@ pub fn connect() -> BlockingWifi<EspWifi<'static>> {
     let ip_info = wifi.wifi().sta_netif().get_ip_info().unwrap();
     info!(
         "[Wifi] Connected, IP {}, gateway {}, netmask {}, DNS {:?}, secondary DNS {:?}",
-        ip_info.ip,
-        ip_info.subnet.gateway,
-        ip_info.subnet.mask,
-        ip_info.dns,
-        ip_info.secondary_dns
+        ip_info.ip, ip_info.subnet.gateway, ip_info.subnet.mask, ip_info.dns, ip_info.secondary_dns
     );
 
     wifi

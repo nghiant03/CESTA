@@ -15,7 +15,9 @@ impl<'a> Dht11Sensor<'a> {
     pub fn new(pin: impl IOPin + 'a) -> Self {
         let mut driver =
             PinDriver::input_output_od(pin.downgrade()).expect("DHT: Failed to init GPIO");
-        driver.set_pull(Pull::Up).expect("DHT: Failed to set pull-up");
+        driver
+            .set_pull(Pull::Up)
+            .expect("DHT: Failed to set pull-up");
         driver.set_high().expect("DHT: Failed to set high");
         Self { pin: driver }
     }
