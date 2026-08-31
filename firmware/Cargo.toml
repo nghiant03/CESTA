@@ -9,7 +9,6 @@ esp-idf-hal = "0.45"
 embedded-svc = "0.28"
 dht-sensor = "0.2"
 embedded-hal = "1.0"
-mqtt-protocol = "0.11"
 log = "0.4"
 esp-idf-sys = { version = "0.36", features = ["binstart"] }
 serde = { version = "1", features = ["derive"] }

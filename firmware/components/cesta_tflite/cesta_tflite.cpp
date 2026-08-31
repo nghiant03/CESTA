@@ -1,5 +1,6 @@
 #include "cesta_tflite.h"
 
+#include <cstdint>
 #include <cstring>
 #include <new>
 
@@ -10,39 +11,64 @@
 
 struct cesta_tflite {
     const tflite::Model *model;
-    tflite::MicroMutableOpResolver<12> resolver;
+    tflite::MicroMutableOpResolver<32> resolver;
     tflite::MicroInterpreter *interpreter;
     uint8_t *tensor_arena;
     const char *error;
+    size_t input_count;
+    size_t output_count;
 };
 
 namespace {
 
 bool register_ops(cesta_tflite_t *classifier) {
-    return classifier->resolver.AddAdd() == kTfLiteOk &&
+    return classifier->resolver.AddAbs() == kTfLiteOk &&
+           classifier->resolver.AddAdd() == kTfLiteOk &&
+           classifier->resolver.AddBatchMatMul() == kTfLiteOk &&
+           classifier->resolver.AddBroadcastTo() == kTfLiteOk &&
+           classifier->resolver.AddCast() == kTfLiteOk &&
            classifier->resolver.AddConcatenation() == kTfLiteOk &&
+           classifier->resolver.AddDiv() == kTfLiteOk &&
+           classifier->resolver.AddExp() == kTfLiteOk &&
            classifier->resolver.AddFullyConnected() == kTfLiteOk &&
            classifier->resolver.AddGather() == kTfLiteOk &&
+           classifier->resolver.AddGreaterEqual() == kTfLiteOk &&
+           classifier->resolver.AddLog() == kTfLiteOk &&
            classifier->resolver.AddLogistic() == kTfLiteOk &&
+           classifier->resolver.AddMaximum() == kTfLiteOk &&
+           classifier->resolver.AddMinimum() == kTfLiteOk &&
            classifier->resolver.AddMul() == kTfLiteOk &&
+           classifier->resolver.AddNotEqual() == kTfLiteOk &&
            classifier->resolver.AddPack() == kTfLiteOk &&
+           classifier->resolver.AddReduceMax() == kTfLiteOk &&
+           classifier->resolver.AddRelu() == kTfLiteOk &&
            classifier->resolver.AddReshape() == kTfLiteOk &&
+           classifier->resolver.AddReverseV2() == kTfLiteOk &&
+           classifier->resolver.AddSelectV2() == kTfLiteOk &&
+           classifier->resolver.AddSlice() == kTfLiteOk &&
            classifier->resolver.AddSoftmax() == kTfLiteOk &&
            classifier->resolver.AddSplit() == kTfLiteOk &&
+           classifier->resolver.AddSqrt() == kTfLiteOk &&
+           classifier->resolver.AddSub() == kTfLiteOk &&
+           classifier->resolver.AddSum() == kTfLiteOk &&
            classifier->resolver.AddTanh() == kTfLiteOk &&
+           classifier->resolver.AddTranspose() == kTfLiteOk &&
            classifier->resolver.AddUnpack() == kTfLiteOk;
 }
 
-bool has_expected_shape(const TfLiteTensor *tensor, const int *shape, int dimensions) {
-    if (tensor == nullptr || tensor->type != kTfLiteFloat32 || tensor->dims == nullptr || tensor->dims->size != dimensions) {
+bool has_deployment_shape(const TfLiteTensor *tensor) {
+    if (tensor == nullptr || tensor->type != kTfLiteFloat32 || tensor->dims == nullptr || tensor->dims->size != 3) {
         return false;
     }
-    for (int index = 0; index < dimensions; ++index) {
-        if (tensor->dims->data[index] != shape[index]) {
-            return false;
-        }
+    return tensor->dims->data[0] == 1 && tensor->dims->data[1] == CESTA_TFLITE_WINDOW_SIZE && tensor->dims->data[2] > 0;
+}
+
+size_t element_count(const TfLiteTensor *tensor) {
+    size_t count = 1;
+    for (int index = 0; index < tensor->dims->size; ++index) {
+        count *= static_cast<size_t>(tensor->dims->data[index]);
     }
-    return true;
+    return count;
 }
 
 }
@@ -84,13 +110,14 @@ extern "C" cesta_tflite_t *cesta_tflite_create(const unsigned char *model_data, 
         return classifier;
     }
 
-    const int input_shape[] = {1, CESTA_TFLITE_INPUT_COUNT, 1};
-    const int output_shape[] = {1, CESTA_TFLITE_OUTPUT_COUNT};
-    if (!has_expected_shape(classifier->interpreter->input(0), input_shape, 3) ||
-        !has_expected_shape(classifier->interpreter->output(0), output_shape, 2)) {
+    const TfLiteTensor *input = classifier->interpreter->input(0);
+    const TfLiteTensor *output = classifier->interpreter->output(0);
+    if (!has_deployment_shape(input) || !has_deployment_shape(output)) {
         classifier->error = "model tensor shape or type does not match firmware";
         return classifier;
     }
+    classifier->input_count = element_count(input);
+    classifier->output_count = element_count(output);
 
     return classifier;
 }
@@ -116,7 +143,8 @@ extern "C" int cesta_tflite_predict(
     size_t output_count
 ) {
     if (classifier == nullptr || classifier->error != nullptr || classifier->interpreter == nullptr ||
-        input == nullptr || output == nullptr || input_count != CESTA_TFLITE_INPUT_COUNT || output_count != CESTA_TFLITE_OUTPUT_COUNT) {
+        input == nullptr || output == nullptr || input_count != classifier->input_count ||
+        output_count != classifier->output_count) {
         return -1;
     }
 

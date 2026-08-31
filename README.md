@@ -133,21 +133,33 @@ runs/                 # Generated experiment artifacts
 
 ## Firmware
 
-The optional ESP32-S3 firmware reads DHT11 sensors, synchronizes time through the configured SNTP server, and publishes readings to `cesta/readings/<device_id>`. It embeds `firmware/model/model.tflite`, runs a six-class prediction after collecting each 60-sample temperature window, and logs the scores and inference time. Install `espup`, `espflash`, `ldproxy`, and ESP-IDF host dependencies, then configure WiFi, MQTT, device, pins, NTP timing, `INFERENCE_ENABLED`, the tensor-arena size, and `FAULT_CONFIG` in `firmware/src/config.rs`.
+The optional ESP32-S3 firmware reads DHT11 sensors, synchronizes time through the configured SNTP server, and publishes readings to `cesta/readings/<device_id>`. Each node runs the receiver-side CESTA pipeline: encode its local 60-sample window, decide requests from receiver-local state, exchange selected hidden-state payloads with neighbors over MQTT, aggregate replies, and produce per-timestep `NORMAL`, `SPIKE`, `DRIFT`, and `STUCK` probabilities. Install `espup`, `espflash`, `ldproxy`, and ESP-IDF host dependencies, then configure WiFi, MQTT, `DEVICE_ID`, pins, `NODE_INDEX`, `NEIGHBORS`, NTP timing, `INFERENCE_ENABLED`, the tensor-arena size, and `FAULT_CONFIG` in `firmware/src/config.rs`.
 
-Inference uses Espressif's TensorFlow Lite Micro component and requires an ESP32-S3 board with octal PSRAM and at least 8 MB flash. Only normal and SPIKE profiles are implemented. SPIKE reads `SPIKE_DHT_PIN` and expects a MOSFET or open-drain transistor to disturb the sensor DATA line. `firmware/src/main.rs` must construct SNTP from `NTP_SERVER`, not `EspSntp::new_default()`.
+Distributed inference uses a request/response exchange beside telemetry. Each device subscribes to its own mailboxes `cesta/exchange/<device_id>/request` and `cesta/exchange/<device_id>/response`. After each reading the node runs a receiver-local request pass, thresholds the exported request probabilities at the model's `request_threshold`, and publishes one binary request per neighbor listing the timesteps it needs. Neighbors answer from their most recent cached window with the requested hidden-state rows only (a zero-count response means no cached window yet), and the receiver reruns the model with the received payloads and publishes the aggregated diagnosis. `EXCHANGE_WAIT_MS` bounds the wait, `EXCHANGE_BUFFER_BYTES` must cover a full-window response, and `EXCHANGE_TOPIC_PREFIX` locates the mailboxes.
+
+Export a trained checkpoint before flashing; one firmware image is required per deployed node. The checked-in artifact only validates conversion and is rejected by the firmware until replaced with a trained export. The default `node` target embeds one graph receiver together with its sender list, so pass the device's graph index as `--receiver-index` and list the same senders in `NEIGHBORS` in `sender_indices` order. The `local` target deploys the shared per-sensor CESTA temporal encoder and classifier without communication, and the `graph` target exports centralized fixed-topology CESTA inference for a runtime that supplies every node window. Export validates shapes, registered TensorFlow Lite Micro operators, and numerical parity with PyTorch.
 
 ```bash
+uv run --isolated \
+  --with 'litert-torch==0.9.4' --with tflite --with 'pydantic<2.12' \
+  --with pyyaml --with loguru --with dulwich --with numpy \
+  python scripts/export_cesta_firmware.py \
+  --model runs/cesta/<run_id> --output firmware/model \
+  --target node --receiver-index <node_index>
+
 cd firmware
 cargo check
 cargo build --release
 espflash flash target/xtensa-esp32s3-espidf/release/cesta-firmware --monitor
 ```
 
-Payload:
+Inference uses Espressif's TensorFlow Lite Micro component and requires an ESP32-S3 board with octal PSRAM and at least 8 MB flash; large MQTT and window buffers are allocated in PSRAM. Only normal and SPIKE hardware profiles are implemented. SPIKE reads `SPIKE_DHT_PIN` and expects a MOSFET or open-drain transistor to disturb the sensor DATA line. `firmware/src/main.rs` must construct SNTP from `NTP_SERVER`, not `EspSntp::new_default()`.
+
+Payloads:
 
 ```json
 {"device_id": "esp32_01", "timestamp": 1718000000, "temperature": 25.3, "humidity": 60.1}
+{"device_id": "esp32_01", "timestamp": 1718000003, "type": "inference", "window_id": 12, "communication_mode": "gumbel_request", "label": "NORMAL", "class": 0, "confidence": 0.98, "probabilities": [0.98, 0.01, 0.0, 0.01], "requested": [["esp32_02", 7]], "received": [["esp32_02", 7]], "request_elapsed_ms": 210, "aggregate_elapsed_ms": 195}
 ```
 
 A lab deployment can use Mosquitto, Telegraf, InfluxDB, Grafana, and a Python subscriber that exports CSV data to `data/raw/esp32_dht11/`.

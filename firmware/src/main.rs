@@ -1,15 +1,20 @@
 mod config;
 mod dht;
+mod exchange;
 mod fault;
 mod inference;
 mod mqtt;
 mod wifi;
 
+use std::sync::mpsc::Sender;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use esp_idf_svc::sntp::{EspSntp, OperatingMode, SntpConf, SyncMode, SyncStatus};
 use log::info;
+
+use crate::inference::NodeClassifier;
+use crate::mqtt::PublishJob;
 
 fn main() {
     esp_idf_svc::sys::link_patches();
@@ -35,12 +40,18 @@ fn main() {
     let _wifi = wifi::connect();
     sync_time();
 
-    let topic = format!("{}{}", config::MQTT_TOPIC_PREFIX, config::DEVICE_ID);
-    let mut mqtt_client = mqtt::connect();
     let mut classifier = if config::INFERENCE_ENABLED {
-        match inference::Classifier::new(config::INFERENCE_TENSOR_ARENA_BYTES) {
+        let sender_indices: Vec<usize> = config::NEIGHBORS.iter().map(|neighbor| neighbor.node_index).collect();
+        match inference::NodeClassifier::new(config::INFERENCE_TENSOR_ARENA_BYTES, config::NODE_INDEX, &sender_indices)
+        {
             Ok(classifier) => {
-                info!("[INFERENCE] TensorFlow Lite model initialized");
+                info!(
+                    "[INFERENCE] node model initialized receiver_index={} neighbors={} hidden_size={} mode={}",
+                    classifier.receiver_index(),
+                    classifier.neighbor_count(),
+                    classifier.hidden_size(),
+                    classifier.communication_mode()
+                );
                 Some(classifier)
             }
             Err(error) => {
@@ -52,9 +63,25 @@ fn main() {
         None
     };
 
+    if let Some(classifier) = classifier.as_ref() {
+        exchange::init(
+            classifier.window_size(),
+            classifier.hidden_size(),
+            classifier.features_per_node(),
+        );
+    }
+    let publisher = mqtt::start();
+
+    let topic = format!("{}{}", config::MQTT_TOPIC_PREFIX, config::DEVICE_ID);
+
     loop {
         match normal_dht_sensor.read(true) {
             Ok(reading) => {
+                if let Some(classifier) = classifier.as_mut()
+                    && classifier.push_temperature(reading.temperature)
+                {
+                    run_diagnosis_cycle(classifier, &publisher, &topic);
+                }
                 let payload = serde_json::json!({
                     "device_id": config::DEVICE_ID,
                     "timestamp": timestamp_epoch(),
@@ -71,31 +98,7 @@ fn main() {
                     reading.humidity,
                     payload
                 );
-                if let Some(classifier) = classifier.as_mut()
-                    && let Some(result) = classifier.push_temperature(reading.temperature)
-                {
-                    match result {
-                        Ok(result) => info!(
-                            "[INFERENCE] class={} confidence={:.4} elapsed_ms={} scores={:?}",
-                            result.class, result.confidence, result.elapsed_ms, result.scores
-                        ),
-                        Err(error) => log::error!("[INFERENCE] Prediction failed: {}", error),
-                    }
-                }
-                let msg = serde_json::to_string(&payload).unwrap();
-
-                match mqtt_client.publish(
-                    &topic,
-                    esp_idf_svc::mqtt::client::QoS::AtLeastOnce,
-                    false,
-                    msg.as_bytes(),
-                ) {
-                    Ok(message_id) => info!(
-                        "[MQTT] publish queued message_id={} topic={} payload={}",
-                        message_id, topic, msg
-                    ),
-                    Err(e) => log::error!("[MQTT] Publish failed: {:?}", e),
-                }
+                publish_json(&publisher, &topic, payload);
             }
             Err(e) => {
                 log::warn!(
@@ -126,20 +129,7 @@ fn main() {
                         reading.humidity,
                         payload
                     );
-                    let msg = serde_json::to_string(&payload).unwrap();
-
-                    match mqtt_client.publish(
-                        &topic,
-                        esp_idf_svc::mqtt::client::QoS::AtLeastOnce,
-                        false,
-                        msg.as_bytes(),
-                    ) {
-                        Ok(message_id) => info!(
-                            "[MQTT] publish queued message_id={} topic={} payload={}",
-                            message_id, topic, msg
-                        ),
-                        Err(e) => log::error!("[MQTT] Publish failed: {:?}", e),
-                    }
+                    publish_json(&publisher, &topic, payload);
                 }
                 Err(e) => {
                     log::warn!(
@@ -153,6 +143,139 @@ fn main() {
         }
 
         thread::sleep(Duration::from_secs(config::SEND_INTERVAL_SECS));
+    }
+}
+
+/// One distributed CESTA diagnosis cycle: receiver-local request pass, neighbor
+/// exchange over MQTT, aggregate pass with received payloads, and a diagnosis
+/// telemetry message.
+fn run_diagnosis_cycle(classifier: &mut NodeClassifier, publisher: &Sender<PublishJob>, topic: &str) {
+    let request_pass = match classifier.predict(None) {
+        Ok(pass) => pass,
+        Err(error) => {
+            log::error!("[INFERENCE] request pass failed: {}", error);
+            return;
+        }
+    };
+    let window_id = exchange::update_cache(&request_pass.hidden, classifier.features());
+    let requested = classifier.threshold_requests(&request_pass.request);
+
+    let mut outstanding = 0;
+    for (neighbor, timesteps) in requested.iter().enumerate() {
+        outstanding += timesteps.len();
+        if timesteps.is_empty() {
+            continue;
+        }
+        let payload = exchange::encode_request(config::DEVICE_ID, window_id, timesteps);
+        let request_topic = exchange::request_topic(config::NEIGHBORS[neighbor].device_id);
+        if publisher
+            .send(PublishJob {
+                topic: request_topic,
+                payload,
+            })
+            .is_err()
+        {
+            log::error!(
+                "[EXCHANGE] failed to queue request to {}",
+                config::NEIGHBORS[neighbor].device_id
+            );
+        }
+    }
+
+    let mut slots = classifier.slots();
+    let deadline = Instant::now() + Duration::from_millis(config::EXCHANGE_WAIT_MS);
+    while outstanding > 0 && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(config::EXCHANGE_POLL_MS));
+        for response in exchange::take_responses() {
+            if response.window_id != window_id {
+                continue;
+            }
+            let Some(neighbor) = config::NEIGHBORS
+                .iter()
+                .position(|candidate| candidate.device_id == response.responder)
+            else {
+                log::warn!("[EXCHANGE] response from unknown device {}", response.responder);
+                continue;
+            };
+            for (index, timestep) in response.timesteps.iter().enumerate() {
+                if !requested[neighbor].contains(timestep) {
+                    continue;
+                }
+                let timestep = *timestep as usize;
+                let hidden_start = index * classifier.hidden_size();
+                let features_start = index * classifier.features_per_node();
+                let hidden = &response.hidden[hidden_start..hidden_start + classifier.hidden_size()];
+                let features = &response.features[features_start..features_start + classifier.features_per_node()];
+                if slots.fill(timestep, neighbor, hidden, features) {
+                    outstanding = outstanding.saturating_sub(1);
+                }
+            }
+        }
+    }
+
+    let aggregate_pass = match classifier.predict(Some(&slots)) {
+        Ok(pass) => pass,
+        Err(error) => {
+            log::error!("[INFERENCE] aggregate pass failed: {}", error);
+            return;
+        }
+    };
+    let diagnosis = classifier.diagnosis(&aggregate_pass);
+    let requested_summary: Vec<(&str, usize)> = requested
+        .iter()
+        .enumerate()
+        .map(|(neighbor, timesteps)| (config::NEIGHBORS[neighbor].device_id, timesteps.len()))
+        .collect();
+    let received_summary: Vec<(&str, usize)> = (0..classifier.neighbor_count())
+        .map(|neighbor| {
+            (
+                config::NEIGHBORS[neighbor].device_id,
+                (0..classifier.window_size())
+                    .filter(|timestep| slots.is_received(*timestep, neighbor))
+                    .count(),
+            )
+        })
+        .collect();
+
+    info!(
+        "[INFERENCE] window_id={} class={} label={} confidence={:.4} requested_timesteps={} received_timesteps={} request_ms={} aggregate_ms={}",
+        window_id,
+        diagnosis.class,
+        diagnosis.label,
+        diagnosis.confidence,
+        requested.iter().map(Vec::len).sum::<usize>(),
+        slots.received_count(),
+        request_pass.elapsed_ms,
+        aggregate_pass.elapsed_ms
+    );
+    let payload = serde_json::json!({
+        "device_id": config::DEVICE_ID,
+        "timestamp": timestamp_epoch(),
+        "type": "inference",
+        "window_id": window_id,
+        "communication_mode": classifier.communication_mode(),
+        "label": diagnosis.label,
+        "class": diagnosis.class,
+        "confidence": diagnosis.confidence,
+        "probabilities": diagnosis.probabilities,
+        "requested": requested_summary,
+        "received": received_summary,
+        "request_elapsed_ms": request_pass.elapsed_ms,
+        "aggregate_elapsed_ms": aggregate_pass.elapsed_ms,
+    });
+    publish_json(publisher, topic, payload);
+}
+
+fn publish_json(publisher: &Sender<PublishJob>, topic: &str, payload: serde_json::Value) {
+    let message = serde_json::to_string(&payload).unwrap();
+    if publisher
+        .send(PublishJob {
+            topic: topic.to_owned(),
+            payload: message.clone().into_bytes(),
+        })
+        .is_err()
+    {
+        log::error!("[MQTT] publish queue closed topic={}", topic);
     }
 }
 

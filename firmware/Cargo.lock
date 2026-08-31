@@ -177,7 +177,6 @@ dependencies = [
  "esp-idf-svc",
  "esp-idf-sys",
  "log",
- "mqtt-protocol",
  "serde",
  "serde_json",
 ]
@@ -917,12 +916,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "lazy_static"
-version = "1.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bbd2bcb4c963f2ddae06a2efc7e9f3591312473c50c6685e1f298068316e66fe"
-
-[[package]]
 name = "leb128fmt"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -985,19 +978,6 @@ name = "minimal-lexical"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "68354c5c6bd36d73ff3feceb05efa59b6acb7626617f4962be322a825e61f79a"
-
-[[package]]
-name = "mqtt-protocol"
-version = "0.11.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ca0b17380dc69fbcf5f967828cfd10e55028ba83a57da1f580c5b0792ab807ac"
-dependencies = [
- "byteorder",
- "lazy_static",
- "log",
- "regex",
- "thiserror 1.0.69",
-]
 
 [[package]]
 name = "nb"

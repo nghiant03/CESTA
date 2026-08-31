@@ -1,0 +1,68 @@
+{
+  "format": "cesta-tflite-micro-v2",
+  "source_checkpoint": null,
+  "trained_checkpoint": false,
+  "target": "node",
+  "window_size": 60,
+  "num_nodes": 3,
+  "features_per_node": 1,
+  "num_classes": 4,
+  "input_shape": [
+    1,
+    60,
+    135
+  ],
+  "output_shape": [
+    1,
+    60,
+    70
+  ],
+  "communication_mode": "gumbel_request",
+  "request_threshold": 0.5,
+  "deployment_contract": "receiver-local request, neighbor response, per-timestep classification",
+  "operators": [
+    "ABS",
+    "ADD",
+    "BROADCAST_TO",
+    "CAST",
+    "CONCATENATION",
+    "DIV",
+    "EXP",
+    "FULLY_CONNECTED",
+    "GREATER_EQUAL",
+    "LOG",
+    "LOGISTIC",
+    "MAXIMUM",
+    "MINIMUM",
+    "MUL",
+    "NOT_EQUAL",
+    "REDUCE_MAX",
+    "RELU",
+    "RESHAPE",
+    "REVERSE_V2",
+    "SLICE",
+    "SOFTMAX",
+    "SQRT",
+    "SUB",
+    "SUM",
+    "TANH"
+  ],
+  "receiver_index": 0,
+  "sender_indices": [
+    1,
+    2
+  ],
+  "neighbor_count": 2,
+  "hidden_size": 64,
+  "input_layout": [
+    "local_features",
+    "neighbor_hidden_and_features",
+    "possible_mask",
+    "received_mask"
+  ],
+  "output_layout": [
+    "class_probabilities",
+    "local_hidden",
+    "request_mask"
+  ]
+}

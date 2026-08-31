@@ -14,13 +14,15 @@ CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
 # Enable MQTT (via esp-mqtt)
 CONFIG_MQTT_PROTOCOL_311=y
 
-# Enable ESP32-S3 octal PSRAM for the TensorFlow Lite tensor arena
+# Enable ESP32-S3 octal PSRAM for the TensorFlow Lite tensor arena and the
+# large MQTT exchange and window buffers
 CONFIG_SPIRAM=y
 CONFIG_SPIRAM_MODE_OCT=y
 CONFIG_SPIRAM_SPEED_80M=y
 CONFIG_SPIRAM_BOOT_INIT=y
-CONFIG_SPIRAM_USE_CAPS_ALLOC=y
+CONFIG_SPIRAM_USE_MALLOC=y
+CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=16384
 
-# Accommodate the embedded 2.7 MB model and firmware runtime
+# Accommodate the embedded model and firmware runtime
 CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y
 CONFIG_PARTITION_TABLE_SINGLE_APP_LARGE=y
