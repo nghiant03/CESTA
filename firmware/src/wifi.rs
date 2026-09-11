@@ -1,3 +1,6 @@
+//! Station-mode Wi-Fi connection with bounded retries; panics if the
+//! configured network stays unreachable.
+
 use esp_idf_hal::modem::Modem;
 use esp_idf_svc::eventloop::EspSystemEventLoop;
 use esp_idf_svc::nvs::EspDefaultNvsPartition;
@@ -6,6 +9,7 @@ use log::info;
 
 use crate::config;
 
+/// Connect to the configured station network and wait for an IP lease.
 pub fn connect() -> BlockingWifi<EspWifi<'static>> {
     let sys_loop = EspSystemEventLoop::take().unwrap();
     let nvs = EspDefaultNvsPartition::take().unwrap();

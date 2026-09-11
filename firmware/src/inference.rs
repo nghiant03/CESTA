@@ -213,6 +213,7 @@ impl NodeClassifier {
             .collect()
     }
 
+    /// Window-level diagnosis from the final timestep's class probabilities.
     pub fn diagnosis(&self, pass: &NodePass) -> Diagnosis {
         let offset = (WINDOW_SIZE - 1) * CLASS_COUNT;
         let probabilities = pass.probabilities[offset..offset + CLASS_COUNT].to_vec();
@@ -230,6 +231,9 @@ impl NodeClassifier {
         }
     }
 
+    /// Assemble one model input row per timestep: local features, then each
+    /// neighbor's hidden+features payload (zeroed without neighbor context),
+    /// then the possible-neighbor mask, then the received-payload mask.
     fn build_input(&mut self, slots: Option<&NeighborSlots>) {
         let features = self.features_per_node;
         let neighbors = self.neighbor_count;

@@ -1,3 +1,7 @@
+//! Static node configuration: network credentials, graph identity
+//! (`NODE_INDEX`, `NEIGHBORS`), inference sizing, timing, and the fault
+//! profile. One firmware image is built per deployed node.
+
 #![allow(dead_code)]
 
 use crate::fault::{FaultConfig, FaultMode};
@@ -56,6 +60,7 @@ pub const NTP_SERVER: &str = "vn.pool.ntp.org";
 pub const NTP_SYNC_TIMEOUT_SECS: u64 = 5;
 pub const NTP_SYNC_POLL_MS: u64 = 500;
 
+/// Active fault profile for this node; select one of the presets below.
 pub const FAULT_CONFIG: FaultConfig = FAULT_NORMAL;
 
 pub const FAULT_NORMAL: FaultConfig = FaultConfig {

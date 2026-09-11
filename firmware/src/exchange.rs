@@ -71,6 +71,8 @@ pub struct Response {
     pub features: Vec<f32>,
 }
 
+/// Initialize the shared exchange state; call once before the transport
+/// starts and before any frame is handled.
 pub fn init(window_size: usize, hidden_size: usize, features_per_node: usize) {
     let _ = STATE.set(SharedState {
         window_size,

@@ -1,3 +1,7 @@
+//! CESTA node firmware: sample the DHT11 sensor, run the receiver-local
+//! CESTA inference cycle (request pass, ESP-NOW neighbor exchange, aggregate
+//! pass), and publish readings and diagnoses over MQTT.
+
 mod config;
 mod dht;
 mod espnow;
@@ -323,6 +327,7 @@ fn publish_json(publisher: &Sender<PublishJob>, topic: &str, payload: serde_json
     }
 }
 
+/// Block until SNTP time sync completes or the configured timeout elapses.
 fn sync_time() {
     let timeout_ms = config::NTP_SYNC_TIMEOUT_SECS * 1_000;
     let poll_ms = config::NTP_SYNC_POLL_MS;
@@ -364,6 +369,7 @@ fn sync_time() {
     std::mem::forget(sntp);
 }
 
+/// Current epoch seconds; 0 while the clock is unsynchronized.
 fn timestamp_epoch() -> u64 {
     use std::time::SystemTime;
     SystemTime::now()
