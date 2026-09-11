@@ -1,12 +1,15 @@
-//! Binary MQTT neighbor exchange protocol for distributed CESTA node inference.
+//! Binary neighbor exchange protocol for distributed CESTA node inference.
 //!
 //! The protocol preserves CESTA's receiver-local request, neighbor-response
-//! contract: a receiver publishes thresholded per-timestep requests to each
-//! requested sender's mailbox, and senders answer from their most recent cached
+//! contract: a receiver sends thresholded per-timestep requests directly to
+//! each requested sender, and senders answer from their most recent cached
 //! hidden state for the requested timesteps only. Responses carry the
 //! receiver's window id so late responses are dropped; senders serve windows
 //! from their own latest inference pass, so payload alignment is approximate
 //! when devices sample out of phase.
+//!
+//! Frames are self-describing (they carry the sender's device id), so the
+//! transport only needs to deliver raw bytes between peers; see `espnow.rs`.
 //!
 //! Wire format (little-endian):
 //! - request: `CESTR` | version | id_len | requester id | window_id u64 |
@@ -90,53 +93,34 @@ fn state() -> Option<&'static SharedState> {
     STATE.get()
 }
 
-/// Whether the exchange was initialized with a loaded node model.
-pub fn ready() -> bool {
-    STATE.get().is_some()
-}
-
-pub fn request_topic(device_id: &str) -> String {
-    format!("{}{}/request", config::EXCHANGE_TOPIC_PREFIX, device_id)
-}
-
-pub fn response_topic(device_id: &str) -> String {
-    format!("{}{}/response", config::EXCHANGE_TOPIC_PREFIX, device_id)
-}
-
-/// Route a received MQTT message into the exchange; drops unknown frames.
-pub fn handle_message(topic: &str, data: &[u8]) {
-    if topic == request_topic(config::DEVICE_ID) {
-        if let Some(request) = decode_request(data) {
-            info!(
-                "[EXCHANGE] request from {} for window {} on {} timesteps",
-                request.requester,
-                request.window_id,
-                request.timesteps.len()
-            );
-            if let Some(state) = state()
-                && let Ok(mut inbox) = state.inbox.lock()
-            {
-                inbox.requests.push_back(request);
-            }
-        } else {
-            warn!("[EXCHANGE] dropped malformed request frame");
+/// Route a received transport frame into the exchange; drops unknown frames.
+pub fn handle_frame(data: &[u8]) {
+    if let Some(request) = decode_request(data) {
+        info!(
+            "[EXCHANGE] request from {} for window {} on {} timesteps",
+            request.requester,
+            request.window_id,
+            request.timesteps.len()
+        );
+        if let Some(state) = state()
+            && let Ok(mut inbox) = state.inbox.lock()
+        {
+            inbox.requests.push_back(request);
         }
-    } else if topic == response_topic(config::DEVICE_ID) {
-        if let Some(response) = decode_response(data) {
-            debug!(
-                "[EXCHANGE] response from {} for window {} on {} timesteps",
-                response.responder,
-                response.window_id,
-                response.timesteps.len()
-            );
-            if let Some(state) = state()
-                && let Ok(mut inbox) = state.inbox.lock()
-            {
-                inbox.responses.push(response);
-            }
-        } else {
-            warn!("[EXCHANGE] dropped malformed response frame");
+    } else if let Some(response) = decode_response(data) {
+        debug!(
+            "[EXCHANGE] response from {} for window {} on {} timesteps",
+            response.responder,
+            response.window_id,
+            response.timesteps.len()
+        );
+        if let Some(state) = state()
+            && let Ok(mut inbox) = state.inbox.lock()
+        {
+            inbox.responses.push(response);
         }
+    } else {
+        warn!("[EXCHANGE] dropped malformed exchange frame");
     }
 }
 
@@ -161,15 +145,11 @@ pub fn update_cache(hidden: &[f32], features: &[f32]) -> u64 {
 }
 
 fn cache_window_id(state: &SharedState) -> u64 {
-    state
-        .cache
-        .lock()
-        .map(|cache| cache.window_id)
-        .unwrap_or(0)
+    state.cache.lock().map(|cache| cache.window_id).unwrap_or(0)
 }
 
-/// Answer pending requests from the cached hidden state; returns response
-/// `(topic, payload)` pairs for the MQTT worker to publish.
+/// Answer pending requests from the cached hidden state; returns
+/// `(requester device id, payload)` pairs for the transport worker to send.
 pub fn serve_pending_requests() -> Vec<(String, Vec<u8>)> {
     let Some(state) = state() else {
         return Vec::new();
@@ -189,7 +169,7 @@ pub fn serve_pending_requests() -> Vec<(String, Vec<u8>)> {
             .into_iter()
             .map(|request| {
                 (
-                    response_topic(&request.requester),
+                    request.requester,
                     encode_response(config::DEVICE_ID, request.window_id, &[], &[], &[]),
                 )
             })
@@ -200,15 +180,20 @@ pub fn serve_pending_requests() -> Vec<(String, Vec<u8>)> {
         .map(|request| {
             let payload = if cache.ready && !request.timesteps.is_empty() {
                 let mut hidden = Vec::with_capacity(request.timesteps.len() * state.hidden_size);
-                let mut features = Vec::with_capacity(request.timesteps.len() * state.features_per_node);
+                let mut features =
+                    Vec::with_capacity(request.timesteps.len() * state.features_per_node);
                 for timestep in &request.timesteps {
                     let timestep = *timestep as usize;
                     if timestep >= state.window_size {
                         continue;
                     }
-                    hidden.extend_from_slice(&cache.hidden[timestep * state.hidden_size..(timestep + 1) * state.hidden_size]);
+                    hidden.extend_from_slice(
+                        &cache.hidden
+                            [timestep * state.hidden_size..(timestep + 1) * state.hidden_size],
+                    );
                     features.extend_from_slice(
-                        &cache.features[timestep * state.features_per_node..(timestep + 1) * state.features_per_node],
+                        &cache.features[timestep * state.features_per_node
+                            ..(timestep + 1) * state.features_per_node],
                     );
                 }
                 encode_response(
@@ -221,12 +206,12 @@ pub fn serve_pending_requests() -> Vec<(String, Vec<u8>)> {
             } else {
                 encode_response(config::DEVICE_ID, request.window_id, &[], &[], &[])
             };
-            (response_topic(&request.requester), payload)
+            (request.requester, payload)
         })
         .collect()
 }
 
-/// Drain collected responses for the MQTT exchange; late or foreign-window
+/// Drain collected responses for the diagnosis cycle; late or foreign-window
 /// responses are dropped by the caller via window-id matching.
 pub fn take_responses() -> Vec<Response> {
     let Some(state) = state() else {
@@ -239,7 +224,8 @@ pub fn take_responses() -> Vec<Response> {
 }
 
 pub fn encode_request(requester: &str, window_id: u64, timesteps: &[u16]) -> Vec<u8> {
-    let mut frame = Vec::with_capacity(REQUEST_MAGIC.len() + 11 + requester.len() + timesteps.len() * 2);
+    let mut frame =
+        Vec::with_capacity(REQUEST_MAGIC.len() + 11 + requester.len() + timesteps.len() * 2);
     frame.extend_from_slice(&REQUEST_MAGIC);
     frame.push(PROTOCOL_VERSION);
     frame.push(requester.len() as u8);
@@ -259,7 +245,9 @@ pub fn encode_response(
     hidden: &[f32],
     features: &[f32],
 ) -> Vec<u8> {
-    let mut frame = Vec::with_capacity(RESPONSE_MAGIC.len() + 11 + responder.len() + timesteps.len() * 6 + hidden.len() * 4);
+    let mut frame = Vec::with_capacity(
+        RESPONSE_MAGIC.len() + 11 + responder.len() + timesteps.len() * 6 + hidden.len() * 4,
+    );
     frame.extend_from_slice(&RESPONSE_MAGIC);
     frame.push(PROTOCOL_VERSION);
     frame.push(responder.len() as u8);
@@ -293,7 +281,11 @@ fn decode_request(data: &[u8]) -> Option<Request> {
     if *offset != data.len() {
         return None;
     }
-    Some(Request { requester, window_id, timesteps })
+    Some(Request {
+        requester,
+        window_id,
+        timesteps,
+    })
 }
 
 fn decode_response(data: &[u8]) -> Option<Response> {
@@ -346,7 +338,9 @@ fn read_device_id(data: &[u8], offset: &mut usize) -> Option<String> {
     if length == 0 || length > MAX_DEVICE_ID || *offset + length > data.len() {
         return None;
     }
-    let id = std::str::from_utf8(&data[*offset..*offset + length]).ok()?.to_owned();
+    let id = std::str::from_utf8(&data[*offset..*offset + length])
+        .ok()?
+        .to_owned();
     *offset += length;
     Some(id)
 }

@@ -19,27 +19,31 @@ pub const NODE_INDEX: usize = 0;
 
 /// Graph senders of this device in `sender_indices` order: the devices this node
 /// may request hidden-state payloads from. Each `device_id` must match the
-/// neighbor's `DEVICE_ID` and each `node_index` must match the exported model's
-/// `sender_indices`.
+/// neighbor's `DEVICE_ID`, each `node_index` must match the exported model's
+/// `sender_indices`, and each `mac` must be the neighbor's station MAC (logged
+/// by every node at boot as "[ESPNOW] own MAC ...").
 pub const NEIGHBORS: [Neighbor; 2] = [
-    Neighbor { device_id: "esp32_Y", node_index: 1 },
-    Neighbor { device_id: "esp32_Z", node_index: 2 },
+    Neighbor {
+        device_id: "esp32_Y",
+        node_index: 1,
+        mac: [0x00; 6],
+    },
+    Neighbor {
+        device_id: "esp32_Z",
+        node_index: 2,
+        mac: [0x00; 6],
+    },
 ];
-
-/// MQTT root for the request/response exchange mailboxes; requests for a device
-/// arrive on `cesta/exchange/<device_id>/request` and responses on
-/// `cesta/exchange/<device_id>/response`.
-pub const EXCHANGE_TOPIC_PREFIX: &str = "cesta/exchange/";
 
 /// Time the diagnosis cycle waits for all requested neighbor payloads.
 pub const EXCHANGE_WAIT_MS: u64 = 1500;
 
-/// Poll interval of the MQTT worker loop and of the response collection loop.
+/// Poll interval of the ESP-NOW and MQTT worker loops and of the response
+/// collection loop.
 pub const EXCHANGE_POLL_MS: u64 = 50;
 
-/// MQTT in/out buffer size; must cover a full-window dense response
-/// (`window_size * (hidden_size + features_per_node) * 4` bytes plus framing).
-pub const EXCHANGE_BUFFER_BYTES: usize = 72 * 1024;
+/// MQTT in/out buffer size for telemetry JSON.
+pub const MQTT_BUFFER_BYTES: usize = 8 * 1024;
 
 pub const DHT_PIN: i32 = 5;
 pub const SPIKE_DHT_PIN: i32 = 7;
@@ -70,4 +74,6 @@ pub const FAULT_SPIKE: FaultConfig = FaultConfig {
 pub struct Neighbor {
     pub device_id: &'static str,
     pub node_index: usize,
+    /// Station MAC address of the neighbor, used for direct ESP-NOW exchange.
+    pub mac: [u8; 6],
 }

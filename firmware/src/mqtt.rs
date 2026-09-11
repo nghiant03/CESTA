@@ -1,7 +1,6 @@
-//! MQTT worker: owns the client, keeps the exchange mailboxes subscribed, and
-//! publishes queued telemetry, request, and response messages.
+//! MQTT worker: owns the client and publishes queued telemetry. The neighbor
+//! exchange no longer uses MQTT; it runs over ESP-NOW (see `espnow.rs`).
 
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::thread;
 use std::time::Duration;
@@ -11,9 +10,6 @@ use esp_idf_svc::mqtt::client::{EspMqttClient, MqttClientConfiguration, QoS};
 use log::{debug, error, info};
 
 use crate::config;
-use crate::exchange;
-
-static CONNECTED: AtomicBool = AtomicBool::new(false);
 
 pub struct PublishJob {
     pub topic: String,
@@ -32,18 +28,7 @@ pub fn start() -> Sender<PublishJob> {
 
 fn run(receiver: Receiver<PublishJob>) {
     let mut client = connect();
-    let mut subscribed = false;
     loop {
-        if CONNECTED.load(Ordering::Relaxed) {
-            if !subscribed && exchange::ready() && subscribe(&mut client) {
-                subscribed = true;
-            }
-        } else {
-            subscribed = false;
-        }
-        for (topic, payload) in exchange::serve_pending_requests() {
-            publish(&mut client, &topic, &payload);
-        }
         for job in receiver.try_iter() {
             publish(&mut client, &job.topic, &job.payload);
         }
@@ -66,8 +51,8 @@ fn connect() -> EspMqttClient<'static> {
 
     let mqtt_config = MqttClientConfiguration {
         client_id: Some(config::DEVICE_ID),
-        buffer_size: config::EXCHANGE_BUFFER_BYTES,
-        out_buffer_size: config::EXCHANGE_BUFFER_BYTES,
+        buffer_size: config::MQTT_BUFFER_BYTES,
+        out_buffer_size: config::MQTT_BUFFER_BYTES,
         ..Default::default()
     };
 
@@ -80,16 +65,9 @@ fn connect() -> EspMqttClient<'static> {
     let client = EspMqttClient::new_cb(&broker_url, &mqtt_config, |event| match event.payload() {
         EventPayload::Connected(session_present) => {
             info!("[MQTT] connected session_present={}", session_present);
-            CONNECTED.store(true, Ordering::Relaxed);
         }
         EventPayload::Disconnected => {
             info!("[MQTT] disconnected");
-            CONNECTED.store(false, Ordering::Relaxed);
-        }
-        EventPayload::Received { topic, data, .. } => {
-            if let Some(topic) = topic {
-                exchange::handle_message(topic, data);
-            }
         }
         EventPayload::Published(message_id) => {
             info!("[MQTT] publish acknowledged message_id={}", message_id);
@@ -105,25 +83,6 @@ fn connect() -> EspMqttClient<'static> {
 
     info!("[MQTT] client created");
     client
-}
-
-fn subscribe(client: &mut EspMqttClient<'static>) -> bool {
-    match client.subscribe(&exchange::request_topic(config::DEVICE_ID), QoS::AtLeastOnce) {
-        Ok(_) => {}
-        Err(error) => {
-            error!("[MQTT] subscribe to request mailbox failed: {:?}", error);
-            return false;
-        }
-    }
-    match client.subscribe(&exchange::response_topic(config::DEVICE_ID), QoS::AtLeastOnce) {
-        Ok(_) => {}
-        Err(error) => {
-            error!("[MQTT] subscribe to response mailbox failed: {:?}", error);
-            return false;
-        }
-    }
-    info!("[MQTT] exchange mailboxes subscribed");
-    true
 }
 
 fn publish(client: &mut EspMqttClient<'static>, topic: &str, payload: &[u8]) {

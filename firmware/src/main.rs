@@ -1,5 +1,6 @@
 mod config;
 mod dht;
+mod espnow;
 mod exchange;
 mod fault;
 mod inference;
@@ -41,9 +42,15 @@ fn main() {
     sync_time();
 
     let mut classifier = if config::INFERENCE_ENABLED {
-        let sender_indices: Vec<usize> = config::NEIGHBORS.iter().map(|neighbor| neighbor.node_index).collect();
-        match inference::NodeClassifier::new(config::INFERENCE_TENSOR_ARENA_BYTES, config::NODE_INDEX, &sender_indices)
-        {
+        let sender_indices: Vec<usize> = config::NEIGHBORS
+            .iter()
+            .map(|neighbor| neighbor.node_index)
+            .collect();
+        match inference::NodeClassifier::new(
+            config::INFERENCE_TENSOR_ARENA_BYTES,
+            config::NODE_INDEX,
+            &sender_indices,
+        ) {
             Ok(classifier) => {
                 info!(
                     "[INFERENCE] node model initialized receiver_index={} neighbors={} hidden_size={} mode={}",
@@ -70,6 +77,7 @@ fn main() {
             classifier.features_per_node(),
         );
     }
+    let espnow = espnow::start();
     let publisher = mqtt::start();
 
     let topic = format!("{}{}", config::MQTT_TOPIC_PREFIX, config::DEVICE_ID);
@@ -80,7 +88,7 @@ fn main() {
                 if let Some(classifier) = classifier.as_mut()
                     && classifier.push_temperature(reading.temperature)
                 {
-                    run_diagnosis_cycle(classifier, &publisher, &topic);
+                    run_diagnosis_cycle(classifier, &espnow, &publisher, &topic);
                 }
                 let payload = serde_json::json!({
                     "device_id": config::DEVICE_ID,
@@ -147,9 +155,14 @@ fn main() {
 }
 
 /// One distributed CESTA diagnosis cycle: receiver-local request pass, neighbor
-/// exchange over MQTT, aggregate pass with received payloads, and a diagnosis
-/// telemetry message.
-fn run_diagnosis_cycle(classifier: &mut NodeClassifier, publisher: &Sender<PublishJob>, topic: &str) {
+/// exchange over ESP-NOW, aggregate pass with received payloads, and a
+/// diagnosis telemetry message.
+fn run_diagnosis_cycle(
+    classifier: &mut NodeClassifier,
+    espnow: &Sender<espnow::EspNowJob>,
+    publisher: &Sender<PublishJob>,
+    topic: &str,
+) {
     let request_pass = match classifier.predict(None) {
         Ok(pass) => pass,
         Err(error) => {
@@ -167,10 +180,9 @@ fn run_diagnosis_cycle(classifier: &mut NodeClassifier, publisher: &Sender<Publi
             continue;
         }
         let payload = exchange::encode_request(config::DEVICE_ID, window_id, timesteps);
-        let request_topic = exchange::request_topic(config::NEIGHBORS[neighbor].device_id);
-        if publisher
-            .send(PublishJob {
-                topic: request_topic,
+        if espnow
+            .send(espnow::EspNowJob {
+                target: config::NEIGHBORS[neighbor].mac,
                 payload,
             })
             .is_err()
@@ -194,7 +206,10 @@ fn run_diagnosis_cycle(classifier: &mut NodeClassifier, publisher: &Sender<Publi
                 .iter()
                 .position(|candidate| candidate.device_id == response.responder)
             else {
-                log::warn!("[EXCHANGE] response from unknown device {}", response.responder);
+                log::warn!(
+                    "[EXCHANGE] response from unknown device {}",
+                    response.responder
+                );
                 continue;
             };
             for (index, timestep) in response.timesteps.iter().enumerate() {
@@ -204,8 +219,10 @@ fn run_diagnosis_cycle(classifier: &mut NodeClassifier, publisher: &Sender<Publi
                 let timestep = *timestep as usize;
                 let hidden_start = index * classifier.hidden_size();
                 let features_start = index * classifier.features_per_node();
-                let hidden = &response.hidden[hidden_start..hidden_start + classifier.hidden_size()];
-                let features = &response.features[features_start..features_start + classifier.features_per_node()];
+                let hidden =
+                    &response.hidden[hidden_start..hidden_start + classifier.hidden_size()];
+                let features = &response.features
+                    [features_start..features_start + classifier.features_per_node()];
                 if slots.fill(timestep, neighbor, hidden, features) {
                     outstanding = outstanding.saturating_sub(1);
                 }
