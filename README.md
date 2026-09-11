@@ -2,9 +2,9 @@
 
 **Communication-Efficient Spatial-Temporal Aggregation** for sensor-network fault diagnosis.
 
-CESTA is the research artifact for studying whether receiver-side selective communication can match strong temporal and spatial baselines on per-timestep sensor-fault diagnosis while using less TX+RX radio energy than dense spatial message passing. It provides reproducible raw-data transformation, Markov fault injection (`SPIKE`, `DRIFT`, `STUCK`), temporal and graph model training, communication and radio-energy evaluation, run artifact persistence, and optional ESP32-S3 firmware for distributed on-device deployment.
+Official implementation of the CESTA paper.
 
-**Contents:** [Setup](#setup) · [Quickstart](#quickstart) · [Capabilities](#capabilities) · [Reproducing the experiments](#reproducing-the-experiments) · [Firmware](#firmware) · [Repository layout](#repository-layout) · [Development](#development) · [Citation](#citation) · [License](#license)
+**Contents:** [Setup](#setup) · [Quickstart](#quickstart) · [Capabilities](#capabilities) · [Usage](#usage) · [Firmware](#firmware) · [Citation](#citation) · [License](#license)
 
 ## Setup
 
@@ -34,15 +34,12 @@ uv run cesta evaluate --model runs/cesta/<run_id> --data data/datasets/Intel_fau
 uv run cesta evaluate --model runs/cesta/<run_id> --data data/datasets/Intel_fault15 --split val
 ```
 
-Training is config-file-first. Canonical model configs live under `config/training/` (connectivity-chronological `70/15/15` split), dataset and fault-injection configs under `config/datasets/`, diagnosis studies under `config/experiments/`, and comparison specifications under `config/benchmarks/`. Run `uv run cesta <command> --help` for all options.
-
 ## Capabilities
 
 **Models**
 
-- Temporal baselines: CNN1D, Transformer, Autoformer, Informer, PatchTST, ModernTCN, and a portable PyTorch Hydra (no CUDA-only kernel required).
+- Temporal baselines: CNN1D, Transformer, Autoformer, Informer, PatchTST, ModernTCN, and Hydra.
 - Spatial models: dynamic ST-GCN, HiFiNet, HMCT, DCRNN, and CESTA.
-- CESTA communication modes: none, dense, receiver-side learned Gumbel request gating, and random, static top-k, or local-change rule-based controls.
 
 **Data and evaluation**
 
@@ -56,22 +53,10 @@ Training is config-file-first. Canonical model configs live under `config/traini
 - Optuna hyperparameter search and audit tooling for benchmark matrices.
 - ESP32-S3 firmware for distributed on-device deployment (see [Firmware](#firmware)).
 
-## Reproducing the experiments
+## Usage
 
-Every training invocation creates a new, never-overwritten run:
 
-```text
-runs/<model>/<run_id>/
-├── weight.pt
-├── config.json
-├── history.jsonl
-├── manifest.json
-├── eval_metrics.json
-├── predictions.npz
-└── communication_metrics.json  # communication-aware models
-```
-
-The full experimental protocol — locked data cohort, baseline matrix, budget-matched controls, and audits — is executable from the checked-in configs and scripts:
+The full experimental protocol is executable from the checked-in configs and scripts:
 
 ```bash
 # Baseline matrix (inspect with --dry-run first; resumable, multi-GPU)
@@ -105,47 +90,26 @@ uv run python scripts/audit_locked_controls.py \
   --test-runs-csv <test-runs.csv> --output runs/control-locked-audit
 ```
 
+Every training invocation creates a new, never-overwritten run:
+
+```text
+runs/<model>/<run_id>/
+├── weight.pt
+├── config.json
+├── history.jsonl
+├── manifest.json
+├── eval_metrics.json
+├── predictions.npz
+└── communication_metrics.json  # communication-aware models
+```
+
 ## Firmware
 
 The optional Rust firmware under [`firmware/`](firmware/README.md) turns each ESP32-S3 board into a distributed CESTA node: local window encoding with an exported TFLite Micro model, selective hidden-state exchange with neighbors directly over ESP-NOW, and per-timestep fault diagnoses published over MQTT. It supports hardware (`SPIKE`) and software-injected (`DRIFT`, `STUCK`) fault profiles covering every fault type in the training pipeline.
 
 See [`firmware/README.md`](firmware/README.md) for hardware requirements, configuration, model export, build/flash commands, and telemetry formats.
 
-## Repository layout
-
-```text
-src/CESTA/        # Library: schema, datasets, injection, models, training,
-                  # evaluation, workflows, CLI
-config/           # Datasets, training, experiments, and benchmark configs
-firmware/         # ESP32-S3 Rust firmware (see firmware/README.md)
-runs/             # Generated experiment artifacts
-scripts/          # Baseline runner, audit/summary, control tuning, export
-```
-
-## Development
-
-```bash
-uv run ruff check src/CESTA
-uv run ruff format src/CESTA
-uv run pyright src/CESTA
-```
-
-The repository is active research software; checked-in configs are the executable experiment definitions, and evidence remains provisional until the experimental protocol is complete.
-
 ## Citation
-
-The paper describing CESTA is under preparation. Until it is published, please cite this repository:
-
-```bibtex
-@software{cesta,
-  title   = {CESTA: Communication-Efficient Spatial-Temporal Aggregation
-             for Sensor-Network Fault Diagnosis},
-  author  = {CESTA authors},
-  year    = {2026},
-  url     = {https://github.com/Sinner/CESTA},
-  note    = {Paper under preparation}
-}
-```
 
 ## License
 
