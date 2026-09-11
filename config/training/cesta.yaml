@@ -1,7 +1,7 @@
 train:
   model: cesta
   epochs: 100
-  batch_size: 16
+  batch_size: 8
   learning_rate: 0.001
   use_focal_loss: true
   focal_gamma: 2.0
