@@ -51,14 +51,25 @@ pub struct NodeClassifier {
 }
 
 impl NodeClassifier {
-    pub fn new(tensor_arena_size: usize, receiver_index: usize, sender_indices: &[usize]) -> Result<Self, String> {
-        let (hidden_size, features_per_node, neighbor_count, input_width, output_width, request_threshold, communication_mode) =
-            parse_metadata(receiver_index, sender_indices)?;
+    pub fn new(
+        tensor_arena_size: usize,
+        receiver_index: usize,
+        sender_indices: &[usize],
+    ) -> Result<Self, String> {
+        let (
+            hidden_size,
+            features_per_node,
+            neighbor_count,
+            input_width,
+            output_width,
+            request_threshold,
+            communication_mode,
+        ) = parse_metadata(receiver_index, sender_indices)?;
         let inner = unsafe {
             cesta_tflite_create(MODEL_DATA.as_ptr(), MODEL_DATA.len(), tensor_arena_size)
         };
-        let inner =
-            NonNull::new(inner).ok_or_else(|| "failed to allocate TensorFlow Lite classifier".to_owned())?;
+        let inner = NonNull::new(inner)
+            .ok_or_else(|| "failed to allocate TensorFlow Lite classifier".to_owned())?;
         let error = unsafe { cesta_tflite_last_error(inner.as_ptr()) };
         if !error.is_null() {
             let message = unsafe { CStr::from_ptr(error) }
@@ -131,7 +142,12 @@ impl NodeClassifier {
     }
 
     pub fn slots(&self) -> NeighborSlots {
-        NeighborSlots::new(WINDOW_SIZE, self.neighbor_count, self.hidden_size, self.features_per_node)
+        NeighborSlots::new(
+            WINDOW_SIZE,
+            self.neighbor_count,
+            self.hidden_size,
+            self.features_per_node,
+        )
     }
 
     /// Run one inference pass. `slots` carries received neighbor payloads; pass
@@ -171,8 +187,9 @@ impl NodeClassifier {
             pass.probabilities[classes..classes + CLASS_COUNT]
                 .copy_from_slice(&self.output[row..row + CLASS_COUNT]);
             let hidden = timestep * self.hidden_size;
-            pass.hidden[hidden..hidden + self.hidden_size]
-                .copy_from_slice(&self.output[row + CLASS_COUNT..row + CLASS_COUNT + self.hidden_size]);
+            pass.hidden[hidden..hidden + self.hidden_size].copy_from_slice(
+                &self.output[row + CLASS_COUNT..row + CLASS_COUNT + self.hidden_size],
+            );
             let requests = timestep * self.neighbor_count;
             pass.request[requests..requests + self.neighbor_count].copy_from_slice(
                 &self.output[row + CLASS_COUNT + self.hidden_size..row + self.output_width],
@@ -187,7 +204,9 @@ impl NodeClassifier {
         (0..self.neighbor_count)
             .map(|neighbor| {
                 (0..WINDOW_SIZE)
-                    .filter(|timestep| request[timestep * self.neighbor_count + neighbor] >= self.request_threshold)
+                    .filter(|timestep| {
+                        request[timestep * self.neighbor_count + neighbor] >= self.request_threshold
+                    })
                     .map(|timestep| timestep as u16)
                     .collect()
             })
@@ -282,7 +301,12 @@ pub struct NeighborSlots {
 }
 
 impl NeighborSlots {
-    pub fn new(window_size: usize, neighbor_count: usize, hidden_size: usize, features_per_node: usize) -> Self {
+    pub fn new(
+        window_size: usize,
+        neighbor_count: usize,
+        hidden_size: usize,
+        features_per_node: usize,
+    ) -> Self {
         let payload_width = neighbor_count * (hidden_size + features_per_node);
         Self {
             window_size,
@@ -296,7 +320,13 @@ impl NeighborSlots {
 
     /// Fill a neighbor payload slot; returns true when the slot was newly
     /// received, false when it was already received or the input is invalid.
-    pub fn fill(&mut self, timestep: usize, neighbor: usize, hidden: &[f32], features: &[f32]) -> bool {
+    pub fn fill(
+        &mut self,
+        timestep: usize,
+        neighbor: usize,
+        hidden: &[f32],
+        features: &[f32],
+    ) -> bool {
         if timestep >= self.window_size
             || neighbor >= self.neighbor_count
             || hidden.len() != self.hidden_size
@@ -309,7 +339,8 @@ impl NeighborSlots {
         let base = timestep * self.neighbor_count * (self.hidden_size + self.features_per_node)
             + neighbor * (self.hidden_size + self.features_per_node);
         self.payload[base..base + self.hidden_size].copy_from_slice(hidden);
-        self.payload[base + self.hidden_size..base + self.hidden_size + self.features_per_node].copy_from_slice(features);
+        self.payload[base + self.hidden_size..base + self.hidden_size + self.features_per_node]
+            .copy_from_slice(features);
         self.received[index] = 1.0;
         newly
     }
@@ -326,19 +357,23 @@ impl NeighborSlots {
 }
 
 type Metadata = (
-    usize, // hidden_size
-    usize, // features_per_node
-    usize, // neighbor_count
-    usize, // input_width
-    usize, // output_width
-    f32,   // request_threshold
+    usize,  // hidden_size
+    usize,  // features_per_node
+    usize,  // neighbor_count
+    usize,  // input_width
+    usize,  // output_width
+    f32,    // request_threshold
     String, // communication_mode
 );
 
 fn parse_metadata(receiver_index: usize, sender_indices: &[usize]) -> Result<Metadata, String> {
-    let metadata: serde_json::Value =
-        serde_json::from_str(MODEL_METADATA).map_err(|error| format!("invalid model metadata: {}", error))?;
-    if metadata.get("trained_checkpoint").and_then(serde_json::Value::as_bool) != Some(true) {
+    let metadata: serde_json::Value = serde_json::from_str(MODEL_METADATA)
+        .map_err(|error| format!("invalid model metadata: {}", error))?;
+    if metadata
+        .get("trained_checkpoint")
+        .and_then(serde_json::Value::as_bool)
+        != Some(true)
+    {
         return Err("firmware model must be exported from a trained CESTA checkpoint".to_owned());
     }
     if metadata.get("target").and_then(serde_json::Value::as_str) != Some("node") {
@@ -358,8 +393,15 @@ fn parse_metadata(receiver_index: usize, sender_indices: &[usize]) -> Result<Met
         return Err("model receiver_index does not match config::NODE_INDEX".to_owned());
     }
     let metadata_senders = json_u64_slice(&metadata, "sender_indices")?;
-    if metadata_senders != sender_indices.iter().map(|index| *index as u64).collect::<Vec<_>>() {
-        return Err("model sender_indices do not match the configured NEIGHBORS node indices".to_owned());
+    if metadata_senders
+        != sender_indices
+            .iter()
+            .map(|index| *index as u64)
+            .collect::<Vec<_>>()
+    {
+        return Err(
+            "model sender_indices do not match the configured NEIGHBORS node indices".to_owned(),
+        );
     }
     let neighbor_count = json_u64(&metadata, "neighbor_count")? as usize;
     if neighbor_count != metadata_senders.len() {
@@ -385,7 +427,15 @@ fn parse_metadata(receiver_index: usize, sender_indices: &[usize]) -> Result<Met
     if communication_mode != "dense" && communication_mode != "gumbel_request" {
         return Err("node export must use dense or gumbel_request communication".to_owned());
     }
-    Ok((hidden_size, features_per_node, neighbor_count, input_width, output_width, request_threshold, communication_mode))
+    Ok((
+        hidden_size,
+        features_per_node,
+        neighbor_count,
+        input_width,
+        output_width,
+        request_threshold,
+        communication_mode,
+    ))
 }
 
 fn json_u64(metadata: &serde_json::Value, key: &str) -> Result<u64, String> {
@@ -417,7 +467,9 @@ fn json_u64_slice(metadata: &serde_json::Value, key: &str) -> Result<Vec<u64>, S
     values
         .iter()
         .map(|value| {
-            value.as_u64().ok_or_else(|| format!("model metadata array '{}' must contain integers", key))
+            value
+                .as_u64()
+                .ok_or_else(|| format!("model metadata array '{}' must contain integers", key))
         })
         .collect()
 }
