@@ -37,6 +37,11 @@ fn main() {
     } else {
         None
     };
+    let mut fault_injector = if config::FAULT_CONFIG.mode.is_software_injected() {
+        Some(fault::FaultInjector::new(config::FAULT_CONFIG))
+    } else {
+        None
+    };
 
     let _wifi = wifi::connect();
     sync_time();
@@ -107,6 +112,28 @@ fn main() {
                     payload
                 );
                 publish_json(&publisher, &topic, payload);
+
+                if let Some(injector) = fault_injector.as_mut() {
+                    let faulted_temperature = injector.apply(reading.temperature);
+                    let payload = serde_json::json!({
+                        "device_id": config::DEVICE_ID,
+                        "timestamp": timestamp_epoch(),
+                        "temperature": faulted_temperature,
+                        "humidity": reading.humidity,
+                        "path": "fault",
+                        "fault_mode": config::FAULT_CONFIG.mode.as_str(),
+                        "gpio": config::FAULT_CONFIG.read_pin,
+                        "source": "software",
+                    });
+                    info!(
+                        "[DHT] path=fault fault={} source=software temperature={:.1}°C (base {:.1}°C) payload={}",
+                        config::FAULT_CONFIG.mode.as_str(),
+                        faulted_temperature,
+                        reading.temperature,
+                        payload
+                    );
+                    publish_json(&publisher, &topic, payload);
+                }
             }
             Err(e) => {
                 log::warn!(

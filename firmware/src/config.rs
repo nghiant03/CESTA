@@ -62,12 +62,44 @@ pub const FAULT_NORMAL: FaultConfig = FaultConfig {
     mode: FaultMode::Normal,
     read_pin: DHT_PIN,
     bypass_checksum: false,
+    drift_rate: 0.0,
+    jitter_std: 0.0,
+    event_duration_samples: 0,
 };
 
+/// Hardware profile: reads `SPIKE_DHT_PIN` and expects an external DATA-line
+/// disturbance on that sensor.
 pub const FAULT_SPIKE: FaultConfig = FaultConfig {
     mode: FaultMode::Spike,
     read_pin: SPIKE_DHT_PIN,
     bypass_checksum: true,
+    drift_rate: 0.0,
+    jitter_std: 0.0,
+    event_duration_samples: 0,
+};
+
+/// Software-injected linear drift on the normal sensor reading. Defaults
+/// mirror the DRIFT injector in `src/CESTA/schema/fault.py`: rate sampled in
+/// 0.05..0.15 °C per sample (0.1 midpoint here) over ~20-sample events.
+pub const FAULT_DRIFT: FaultConfig = FaultConfig {
+    mode: FaultMode::Drift,
+    read_pin: DHT_PIN,
+    bypass_checksum: false,
+    drift_rate: 0.1,
+    jitter_std: 0.0,
+    event_duration_samples: 20,
+};
+
+/// Software-injected stuck-at-value fault on the normal sensor reading.
+/// Defaults mirror the STUCK injector in `src/CESTA/schema/fault.py`:
+/// ~10-sample events frozen at the event's first reading with small jitter.
+pub const FAULT_STUCK: FaultConfig = FaultConfig {
+    mode: FaultMode::Stuck,
+    read_pin: DHT_PIN,
+    bypass_checksum: false,
+    drift_rate: 0.0,
+    jitter_std: 0.1,
+    event_duration_samples: 10,
 };
 
 #[derive(Clone, Copy, Debug)]
