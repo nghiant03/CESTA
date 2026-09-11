@@ -9,13 +9,12 @@ Keep this file current after code changes. CESTA is a research project for commu
 - Ruff uses line length 150 and import sorting from `pyproject.toml`.
 - Use `from __future__ import annotations` and lazy function imports instead of `typing.TYPE_CHECKING`.
 - Reconsider names whenever their purpose changes.
-- Keep every notebook import block in its top cell.
 
 ## Documentation
 
-- `README.md`: setup, workflow, capabilities, firmware, and repository layout.
-- `docs/RESEARCH.md`: the single research document containing aim, protocol, evidence, work plan, and hard boundaries.
-- Do not create separate proposal, experiment, result, plan, or subsystem documents. Merge durable project guidance into `README.md` or `AGENTS.md`, and research updates into `docs/RESEARCH.md`.
+- `README.md`: setup, workflow, capabilities, firmware summary, and repository layout.
+- `firmware/README.md`: firmware hardware requirements, configuration, export, build/flash, and telemetry.
+- Do not create separate proposal, experiment, result, plan, or subsystem documents. Merge durable project guidance into `README.md` or `AGENTS.md`.
 
 ## Architecture
 
@@ -41,9 +40,7 @@ config/
 ├── training/        # Canonical model training configs
 ├── experiments/     # Diagnosis ablations, controls, and sweeps
 └── benchmarks/      # Comparison and tuning-grid specifications
-docs/RESEARCH.md     # Consolidated research record
 firmware/             # ESP32-S3 Rust firmware
-notebooks/            # Analysis notebooks
 runs/                 # Generated artifacts
 ```
 
@@ -107,15 +104,15 @@ The model may expose communication statistics, soft receiver request probabiliti
 
 ## Firmware
 
-The ESP32-S3 firmware lives under `firmware/`. It embeds `firmware/model/model.tflite` and calls Espressif TensorFlow Lite Micro through the `components/cesta_tflite` C++ bridge. `scripts/export_cesta_firmware.py` exports a trained CESTA checkpoint, validates numerical parity and registered operators, and writes metadata beside the model. Each node deployment must preserve CESTA's receiver-local request, neighbor-response, per-timestep many-to-many contract, with communication performed by the firmware protocol rather than silently replacing the model with a local-only classifier. The node artifact consumes the local 60-sample window plus selected neighbor payloads and returns per-timestep probabilities and request decisions; firmware parses `model.json` and rejects exports whose target, receiver, sender list, shapes, or training status do not match `config.rs`. Firmware rejects the checked-in conversion-validation artifact until it is replaced by a trained export. The exchange is a binary request/response protocol over the MQTT mailboxes `cesta/exchange/<device_id>/{request,response}`; a worker thread owns the MQTT client, serves cached hidden-state rows for requested timesteps, and publishes queued telemetry, while the main loop thresholds request probabilities at the model's `request_threshold` (evaluation semantics), waits up to `EXCHANGE_WAIT_MS`, and reruns the model with the received payloads. Inference requires octal PSRAM and 8 MB flash settings from `sdkconfig.defaults`, which route large allocations to PSRAM. `firmware/src/config.rs` selects normal or SPIKE profiles; SPIKE reads `SPIKE_DHT_PIN` and expects an external DATA-line disturbance. `main.rs` must construct SNTP from `NTP_SERVER`, not `EspSntp::new_default()`. Build and deployment commands are in `README.md`.
+The ESP32-S3 firmware lives under `firmware/`. It embeds `firmware/model/model.tflite` and calls Espressif TensorFlow Lite Micro through the `components/cesta_tflite` C++ bridge. `scripts/export_cesta_firmware.py` exports a trained CESTA checkpoint, validates numerical parity and registered operators, and writes metadata beside the model. Each node deployment must preserve CESTA's receiver-local request, neighbor-response, per-timestep many-to-many contract, with communication performed by the firmware protocol rather than silently replacing the model with a local-only classifier. The node artifact consumes the local 60-sample window plus selected neighbor payloads and returns per-timestep probabilities and request decisions; firmware parses `model.json` and rejects exports whose target, receiver, sender list, shapes, or training status do not match `config.rs`. Firmware rejects the checked-in conversion-validation artifact until it is replaced by a trained export. The exchange is a binary request/response protocol carried directly between nodes over ESP-NOW: `espnow.rs` fragments exchange frames into 250-byte packets and reassembles them per peer, its worker thread serves cached hidden-state rows for requested timesteps and sends queued frames, and peers are the static `NEIGHBORS` station MAC addresses (unencrypted, current station channel). MQTT remains only for telemetry publishing. The main loop thresholds request probabilities at the model's `request_threshold` (evaluation semantics), waits up to `EXCHANGE_WAIT_MS`, and reruns the model with the received payloads. Telemetry publishes JSON readings (`device_id`, `timestamp`, `temperature`, `humidity`, `path`, `fault_mode`, `gpio`) and inference records (`type: "inference"`, `window_id`, `label`, `class`, `confidence`, `probabilities`, `requested`/`received` per-neighbor timestep counts, pass latencies) to `cesta/readings/<device_id>`; a lab deployment can collect them with Mosquitto, Telegraf, InfluxDB, and Grafana. Inference requires octal PSRAM and 8 MB flash settings from `sdkconfig.defaults`, which route large allocations to PSRAM. `firmware/src/config.rs` selects normal, SPIKE, DRIFT, or STUCK profiles, one per fault type in `schema/fault.py`; SPIKE reads `SPIKE_DHT_PIN` and expects an external DATA-line disturbance, while DRIFT and STUCK are software-injected in `fault.rs` mirroring the Python injectors with per-event randomization over `event_duration_samples` events. `main.rs` must construct SNTP from `NTP_SERVER`, not `EspSntp::new_default()`. Build and deployment commands are in `README.md`.
 
 ## Commands
 
 ```bash
-uv run cesta transform intel_lab data/raw/Intel/data.txt data/datasets/intel_lab --config config/datasets/intel-lab/fault-15.yaml
-uv run cesta train config/training/cesta.yaml data/canon/intel_lab
-uv run cesta evaluate --model runs/cesta/<run_id> --data data/canon/intel_lab
-uv run cesta optimize --data data/canon/intel_lab --model cnn1d --n-trials 20 --epochs 10
+uv run cesta transform intel_lab data/raw/Intel/data.txt data/datasets/Intel_fault15 --config config/datasets/intel-lab/fault-15.yaml
+uv run cesta train config/training/cesta.yaml data/datasets/Intel_fault15
+uv run cesta evaluate --model runs/cesta/<run_id> --data data/datasets/Intel_fault15
+uv run cesta optimize --data data/datasets/Intel_fault15 --model cnn1d --n-trials 20 --epochs 10
 
 uv run python scripts/run_all_baselines.py --dry-run
 uv run python scripts/audit_decisive_comparison.py --spec config/benchmarks/decisive-comparison.yaml --runs-root runs --output runs/decisive-comparison-audit --allow-incomplete
@@ -125,6 +122,7 @@ uv run python scripts/derive_control_budgets.py --runs-csv <validation-runs.csv>
 uv run python scripts/lock_control_policies.py --budgets <budgets.yaml> --validation-runs-csv <validation-runs.csv> --controller <control> <variants...> --output runs/control-tuning/control-lock.yaml
 uv run python scripts/audit_locked_controls.py --lock <control-lock.yaml> --test-runs-csv <test-runs.csv> --output runs/control-locked-audit
 uv run python scripts/audit_validation_logit_sensitivity.py --model <run> --data <dataset>
+uv run python scripts/posthoc_spatial_energy.py --output runs/posthoc-spatial-energy
 ```
 
 The baseline runner reconciles completed cells from manifests and resolved configs. All default model configs use the connectivity-chronological `70/15/15` split for direct CESTA accuracy comparisons; historical `80/10/10` runs are descriptive only. The benchmark auditor rejects missing, duplicate, inconsistent, or incomparable cells without selecting by test performance.
