@@ -1,2 +1,5 @@
 /target
 /.embuild
+
+# Exported model artifact (regenerate with scripts/export_cesta_firmware.py)
+/model/model.tflite

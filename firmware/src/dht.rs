@@ -1,6 +1,6 @@
 //! DHT11 single-wire temperature/humidity sensor driver with optional
-//! checksum validation (disabled by the SPIKE fault profile so disturbed
-//! frames still decode).
+//! checksum validation (a fault profile may disable it so disturbed frames
+//! still decode).
 
 use esp_idf_hal::delay::Ets;
 use esp_idf_hal::gpio::{AnyIOPin, IOPin, InputOutput, PinDriver, Pull};
@@ -27,8 +27,8 @@ impl<'a> Dht11Sensor<'a> {
     }
 
     /// Read one temperature/humidity sample. When `checksum_enabled` is
-    /// false, frames with a mismatched checksum still decode (used by the
-    /// SPIKE fault profile, where the DATA line is deliberately disturbed).
+    /// false, frames with a mismatched checksum still decode (intended for
+    /// fault profiles with a deliberately disturbed DATA line).
     pub fn read(&mut self, checksum_enabled: bool) -> Result<DhtReading, DhtError> {
         let mut data = [0u8; 5];
 

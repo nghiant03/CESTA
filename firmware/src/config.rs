@@ -50,7 +50,6 @@ pub const EXCHANGE_POLL_MS: u64 = 50;
 pub const MQTT_BUFFER_BYTES: usize = 8 * 1024;
 
 pub const DHT_PIN: i32 = 5;
-pub const SPIKE_DHT_PIN: i32 = 7;
 pub const SEND_INTERVAL_SECS: u64 = 3;
 
 pub const INFERENCE_ENABLED: bool = true;
@@ -67,20 +66,23 @@ pub const FAULT_NORMAL: FaultConfig = FaultConfig {
     mode: FaultMode::Normal,
     read_pin: DHT_PIN,
     bypass_checksum: false,
+    spike_magnitude_range: (0.0, 0.0),
     drift_rate: 0.0,
     jitter_std: 0.0,
     event_duration_samples: 0,
 };
 
-/// Hardware profile: reads `SPIKE_DHT_PIN` and expects an external DATA-line
-/// disturbance on that sensor.
+/// Software-injected spike on the normal sensor reading. Defaults mirror the
+/// SPIKE injector in `src/CESTA/schema/fault.py`: offset magnitude sampled in
+/// 1.0..4.0 °C with a random sign per event, over ~2-sample events.
 pub const FAULT_SPIKE: FaultConfig = FaultConfig {
     mode: FaultMode::Spike,
-    read_pin: SPIKE_DHT_PIN,
-    bypass_checksum: true,
+    read_pin: DHT_PIN,
+    bypass_checksum: false,
+    spike_magnitude_range: (1.0, 4.0),
     drift_rate: 0.0,
     jitter_std: 0.0,
-    event_duration_samples: 0,
+    event_duration_samples: 2,
 };
 
 /// Software-injected linear drift on the normal sensor reading. Defaults
@@ -90,6 +92,7 @@ pub const FAULT_DRIFT: FaultConfig = FaultConfig {
     mode: FaultMode::Drift,
     read_pin: DHT_PIN,
     bypass_checksum: false,
+    spike_magnitude_range: (0.0, 0.0),
     drift_rate: 0.1,
     jitter_std: 0.0,
     event_duration_samples: 20,
@@ -102,6 +105,7 @@ pub const FAULT_STUCK: FaultConfig = FaultConfig {
     mode: FaultMode::Stuck,
     read_pin: DHT_PIN,
     bypass_checksum: false,
+    spike_magnitude_range: (0.0, 0.0),
     drift_rate: 0.0,
     jitter_std: 0.1,
     event_duration_samples: 10,

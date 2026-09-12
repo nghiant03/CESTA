@@ -1,6 +1,5 @@
 //! Fault profiles selected by `config::FAULT_CONFIG`, one per fault type in
-//! the main codebase (`src/CESTA/schema/fault.py`). SPIKE is a hardware
-//! profile that reads a physically disturbed second sensor; DRIFT and STUCK
+//! the main codebase (`src/CESTA/schema/fault.py`). SPIKE, DRIFT, and STUCK
 //! are software-injected on the normal reading, mirroring the Python
 //! injectors with per-event randomization.
 
@@ -24,11 +23,10 @@ impl FaultMode {
         }
     }
 
-    /// Software-injected modes transform the normal sensor reading in
-    /// firmware; hardware modes (Spike) read a physically disturbed second
-    /// sensor instead.
+    /// All fault modes are software-injected: they transform the normal
+    /// sensor reading in firmware.
     pub fn is_software_injected(self) -> bool {
-        matches!(self, Self::Drift | Self::Stuck)
+        matches!(self, Self::Spike | Self::Drift | Self::Stuck)
     }
 }
 
@@ -37,12 +35,15 @@ pub struct FaultConfig {
     pub mode: FaultMode,
     pub read_pin: i32,
     pub bypass_checksum: bool,
+    /// Inclusive (min, max) absolute spike offset in °C, sampled per event
+    /// (Spike mode only).
+    pub spike_magnitude_range: (f32, f32),
     /// Drift offset added per sample within an event, in °C (Drift mode only).
     pub drift_rate: f32,
     /// Gaussian jitter standard deviation around the frozen value, in °C
     /// (Stuck mode only).
     pub jitter_std: f32,
-    /// Samples per fault event before a new event starts (Drift/Stuck only).
+    /// Samples per fault event before a new event starts (fault modes only).
     pub event_duration_samples: u32,
 }
 
@@ -57,13 +58,13 @@ impl FaultConfig {
 }
 
 /// Software fault injector mirroring the Python injectors in
-/// `src/CESTA/injection/faults.py` for the modes that have no hardware
-/// disturbance mechanism. Faults are applied as consecutive events of
-/// `event_duration_samples` samples; each event re-randomizes its parameters
-/// like a new contiguous Markov segment in the Python injectors.
+/// `src/CESTA/injection/faults.py`. Faults are applied as consecutive events
+/// of `event_duration_samples` samples; each event re-randomizes its
+/// parameters like a new contiguous Markov segment in the Python injectors.
 pub struct FaultInjector {
     config: FaultConfig,
     step: u32,
+    spike_offset: f32,
     direction: f32,
     stuck_value: f32,
 }
@@ -73,6 +74,7 @@ impl FaultInjector {
         Self {
             config,
             step: 0,
+            spike_offset: 0.0,
             direction: 1.0,
             stuck_value: 0.0,
         }
@@ -81,10 +83,27 @@ impl FaultInjector {
     /// Return the faulted temperature for one normal-path sample.
     pub fn apply(&mut self, temperature: f32) -> f32 {
         match self.config.mode {
+            FaultMode::Spike => self.apply_spike(temperature),
             FaultMode::Drift => self.apply_drift(temperature),
             FaultMode::Stuck => self.apply_stuck(temperature),
-            _ => temperature,
+            FaultMode::Normal => temperature,
         }
+    }
+
+    /// Spike: constant offset for the whole event, with magnitude sampled
+    /// from `spike_magnitude_range` and a random sign per event, mirroring
+    /// `SpikeFaultInjector`.
+    fn apply_spike(&mut self, temperature: f32) -> f32 {
+        if self.step == 0 {
+            let (lo, hi) = self.config.spike_magnitude_range;
+            let magnitude = lo + random_uniform() * (hi - lo);
+            self.spike_offset = if random_bool() { magnitude } else { -magnitude };
+        }
+        self.step += 1;
+        if self.step >= self.config.event_duration_samples {
+            self.step = 0;
+        }
+        temperature + self.spike_offset
     }
 
     /// Linear drift: `temperature + direction * drift_rate * i` for the

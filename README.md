@@ -105,8 +105,6 @@ runs/<model>/<run_id>/
 
 ## Firmware
 
-The optional Rust firmware under [`firmware/`](firmware/README.md) turns each ESP32-S3 board into a distributed CESTA node: local window encoding with an exported TFLite Micro model, selective hidden-state exchange with neighbors directly over ESP-NOW, and per-timestep fault diagnoses published over MQTT. It supports hardware (`SPIKE`) and software-injected (`DRIFT`, `STUCK`) fault profiles covering every fault type in the training pipeline.
-
 See [`firmware/README.md`](firmware/README.md) for hardware requirements, configuration, model export, build/flash commands, and telemetry formats.
 
 ## Citation
