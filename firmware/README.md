@@ -37,6 +37,8 @@ One firmware image is built per deployed node. Edit `src/config.rs`:
 
 Export a trained checkpoint before flashing.
 
+The exporter splits concatenations into groups of at most 10 inputs after conversion, matching the esp-tflite-micro 1.3.5 kernel limit. It checks the rewritten artifact's operators, shapes, and numerical parity, including nonzero node inputs with missing, partial, and full neighbor payloads.
+
 ```bash
 # From the repository root
 uv run --isolated \
