@@ -4,6 +4,7 @@
 
 mod config;
 mod dht;
+mod diagnostic;
 mod espnow;
 mod exchange;
 mod fault;
@@ -24,6 +25,10 @@ use crate::mqtt::PublishJob;
 fn main() {
     esp_idf_svc::sys::link_patches();
     esp_idf_svc::log::EspLogger::initialize_default();
+
+    if config::INFERENCE_SYNTHETIC_DIAGNOSTIC {
+        diagnostic::run();
+    }
 
     info!(
         "[CESTA] Device {} starting with fault mode {} ",

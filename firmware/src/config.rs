@@ -53,6 +53,9 @@ pub const DHT_PIN: i32 = 5;
 pub const SEND_INTERVAL_SECS: u64 = 3;
 
 pub const INFERENCE_ENABLED: bool = true;
+/// Hardware diagnostic only: deterministic synthetic windows and loopback
+/// payloads, with serial results. Bypasses DHT, Wi-Fi, ESP-NOW, and MQTT.
+pub const INFERENCE_SYNTHETIC_DIAGNOSTIC: bool = true;
 pub const INFERENCE_TENSOR_ARENA_BYTES: usize = 2 * 1024 * 1024;
 
 pub const NTP_SERVER: &str = "vn.pool.ntp.org";

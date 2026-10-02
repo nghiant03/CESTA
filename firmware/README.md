@@ -20,6 +20,7 @@ One firmware image is built per deployed node. Edit `src/config.rs`:
 | `NEIGHBORS` | Graph senders in `sender_indices` order: `device_id`, `node_index`, and station MAC (every node logs its own MAC at boot) |
 | `DHT_PIN` | Sensor pin |
 | `INFERENCE_ENABLED` / `INFERENCE_TENSOR_ARENA_BYTES` | Toggle and size the TFLite Micro arena |
+| `INFERENCE_SYNTHETIC_DIAGNOSTIC` | Run serial-only synthetic inference at boot; set `false` for sensor/radio operation |
 | `NTP_SERVER` and timing | SNTP clock sync for timestamps |
 | `EXCHANGE_WAIT_MS` / `EXCHANGE_POLL_MS` | Diagnosis-cycle exchange deadline and worker poll interval |
 | `FAULT_CONFIG` | Fault profile (see below) |
@@ -65,6 +66,10 @@ touch sdkconfig.defaults
 cargo build --release
 espflash flash target/xtensa-esp32s3-espidf/release/cesta-firmware --monitor
 ```
+
+## Synthetic hardware diagnostic
+
+Set `INFERENCE_SYNTHETIC_DIAGNOSTIC = true` in `src/config.rs`, build, and flash to exercise the trained node model without a DHT sensor or network. This mode is enabled for the current hardware test. It feeds complete 60-sample normal, spike, drift, and stuck windows, runs receiver-local request passes, then aggregate passes with missing neighbors and synthetic loopback replies for requested timesteps. Serial lines prefixed `[SYNTHETIC]` report class probabilities, latency, and received counts. A final `PASS` requires finite hidden states and request probabilities and normalized class probabilities for every timestep; it does not assert diagnosis accuracy or validate ESP-NOW transport. The board idles after completion. Set the flag back to `false` and reflash to resume normal operation.
 
 The C++ bridge logs arena usage at initialization. It time-slices tensor allocation at idle priority and yields periodically between inference operators so long float32 passes allow the idle-task watchdog and other tasks to run.
 
