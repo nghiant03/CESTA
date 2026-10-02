@@ -5,14 +5,36 @@
 #include <new>
 
 #include "esp_heap_caps.h"
+#include "esp_log.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "tensorflow/lite/micro/micro_interpreter.h"
 #include "tensorflow/lite/micro/micro_mutable_op_resolver.h"
+#include "tensorflow/lite/micro/micro_profiler_interface.h"
 #include "tensorflow/lite/schema/schema_generated.h"
+
+// Use operator-boundary hooks to let idle/network tasks run during long float
+// inference passes. No profiling records or watchdog suppression are needed.
+class CooperativeScheduler : public tflite::MicroProfilerInterface {
+public:
+    uint32_t BeginEvent(const char *) override { return 0; }
+    void EndEvent(uint32_t) override {
+        const TickType_t now = xTaskGetTickCount();
+        if (now - last_yield_ >= pdMS_TO_TICKS(100)) {
+            vTaskDelay(1);
+            last_yield_ = xTaskGetTickCount();
+        }
+    }
+
+private:
+    TickType_t last_yield_ = 0;
+};
 
 struct cesta_tflite {
     const tflite::Model *model;
     tflite::MicroMutableOpResolver<32> resolver;
     tflite::MicroInterpreter *interpreter;
+    CooperativeScheduler scheduler;
     uint8_t *tensor_arena;
     const char *error;
     size_t input_count;
@@ -100,12 +122,19 @@ extern "C" cesta_tflite_t *cesta_tflite_create(const unsigned char *model_data, 
     }
 
     classifier->interpreter = new (std::nothrow)
-        tflite::MicroInterpreter(classifier->model, classifier->resolver, classifier->tensor_arena, tensor_arena_size);
+        tflite::MicroInterpreter(classifier->model, classifier->resolver, classifier->tensor_arena, tensor_arena_size,
+                                 nullptr, &classifier->scheduler);
     if (classifier->interpreter == nullptr) {
         classifier->error = "failed to create TensorFlow Lite interpreter";
         return classifier;
     }
-    if (classifier->interpreter->AllocateTensors() != kTfLiteOk) {
+    // The one-time greedy memory planner has no operator hooks. Time-slice it
+    // with the idle task, then restore the caller's normal priority.
+    const UBaseType_t priority = uxTaskPriorityGet(nullptr);
+    vTaskPrioritySet(nullptr, tskIDLE_PRIORITY);
+    const TfLiteStatus allocation_status = classifier->interpreter->AllocateTensors();
+    vTaskPrioritySet(nullptr, priority);
+    if (allocation_status != kTfLiteOk) {
         classifier->error = "failed to allocate TensorFlow Lite tensors";
         return classifier;
     }
@@ -118,6 +147,8 @@ extern "C" cesta_tflite_t *cesta_tflite_create(const unsigned char *model_data, 
     }
     classifier->input_count = element_count(input);
     classifier->output_count = element_count(output);
+    ESP_LOGI("cesta_tflite", "Tensor arena used: %u / %u bytes",
+             static_cast<unsigned>(classifier->interpreter->arena_used_bytes()), static_cast<unsigned>(tensor_arena_size));
 
     return classifier;
 }

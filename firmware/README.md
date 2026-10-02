@@ -60,9 +60,13 @@ Export targets:
 ```bash
 cd firmware
 cargo check
+# After editing components/cesta_tflite/, force ESP-IDF component rebuilding:
+touch sdkconfig.defaults
 cargo build --release
 espflash flash target/xtensa-esp32s3-espidf/release/cesta-firmware --monitor
 ```
+
+The C++ bridge logs arena usage at initialization. It time-slices tensor allocation at idle priority and yields periodically between inference operators so long float32 passes allow the idle-task watchdog and other tasks to run.
 
 ## Telemetry
 
