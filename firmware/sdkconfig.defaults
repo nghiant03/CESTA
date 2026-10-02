@@ -26,3 +26,7 @@ CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=16384
 # Accommodate the embedded model and firmware runtime
 CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y
 CONFIG_PARTITION_TABLE_SINGLE_APP_LARGE=y
+
+# Route console logs to the onboard USB Serial/JTAG port so hosts connected
+# over the USB debug port can see firmware output
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
