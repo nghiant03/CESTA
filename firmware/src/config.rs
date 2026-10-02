@@ -29,12 +29,12 @@ pub const NODE_INDEX: usize = 0;
 pub const NEIGHBORS: [Neighbor; 2] = [
     Neighbor {
         device_id: "esp32_Y",
-        node_index: 1,
+        node_index: 2,
         mac: [0x00; 6],
     },
     Neighbor {
         device_id: "esp32_Z",
-        node_index: 2,
+        node_index: 30,
         mac: [0x00; 6],
     },
 ];
