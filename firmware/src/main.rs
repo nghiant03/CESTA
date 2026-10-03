@@ -1,6 +1,4 @@
-//! CESTA node firmware: sample the DHT11 sensor, run the receiver-local
-//! CESTA inference cycle (request pass, ESP-NOW neighbor exchange, aggregate
-//! pass), and publish readings and diagnoses over MQTT.
+//! Node firmware.
 
 mod config;
 mod dht;

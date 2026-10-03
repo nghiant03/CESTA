@@ -1,10 +1,4 @@
-//! Distributed CESTA node inference through the exported TFLite artifact.
-//!
-//! The embedded model is a `--target node` export from
-//! `scripts/export_cesta_firmware.py`. Each pass consumes the local window plus
-//! per-neighbor hidden-state payloads and returns per-timestep class
-//! probabilities, the local hidden state, and receiver-local request
-//! probabilities for every possible sender.
+//! Distributed node inference through the exported TFLite artifact.
 
 use std::ffi::{CStr, c_char, c_int, c_uchar, c_void};
 use std::ptr::NonNull;
@@ -119,8 +113,6 @@ impl NodeClassifier {
         &self.communication_mode
     }
 
-    /// Append a temperature sample to the sliding window and report whether a
-    /// full window is available.
     pub fn push_temperature(&mut self, temperature: f32) -> bool {
         let features = self.features_per_node;
         if self.sample_count < WINDOW_SIZE {
@@ -150,8 +142,6 @@ impl NodeClassifier {
         )
     }
 
-    /// Run one inference pass. `slots` carries received neighbor payloads; pass
-    /// `None` for the receiver-local request pass without neighbor context.
     pub fn predict(&mut self, slots: Option<&NeighborSlots>) -> Result<NodePass, String> {
         let started = Instant::now();
         self.build_input(slots);
@@ -198,8 +188,6 @@ impl NodeClassifier {
         Ok(pass)
     }
 
-    /// Threshold receiver-local request probabilities into per-neighbor
-    /// requested timestep indices, mirroring evaluation semantics.
     pub fn threshold_requests(&self, request: &[f32]) -> Vec<Vec<u16>> {
         (0..self.neighbor_count)
             .map(|neighbor| {
@@ -213,7 +201,6 @@ impl NodeClassifier {
             .collect()
     }
 
-    /// Window-level diagnosis from the final timestep's class probabilities.
     pub fn diagnosis(&self, pass: &NodePass) -> Diagnosis {
         let offset = (WINDOW_SIZE - 1) * CLASS_COUNT;
         let probabilities = pass.probabilities[offset..offset + CLASS_COUNT].to_vec();
@@ -231,9 +218,6 @@ impl NodeClassifier {
         }
     }
 
-    /// Assemble one model input row per timestep: local features, then each
-    /// neighbor's hidden+features payload (zeroed without neighbor context),
-    /// then the possible-neighbor mask, then the received-payload mask.
     fn build_input(&mut self, slots: Option<&NeighborSlots>) {
         let features = self.features_per_node;
         let neighbors = self.neighbor_count;
@@ -279,11 +263,8 @@ impl Drop for NodeClassifier {
 }
 
 pub struct NodePass {
-    /// Per-timestep class probabilities, `window_size * class_count`.
     pub probabilities: Vec<f32>,
-    /// Local hidden states for this window, `window_size * hidden_size`.
     pub hidden: Vec<f32>,
-    /// Receiver-local request probabilities, `window_size * neighbor_count`.
     pub request: Vec<f32>,
     pub elapsed_ms: u128,
 }
@@ -322,8 +303,6 @@ impl NeighborSlots {
         }
     }
 
-    /// Fill a neighbor payload slot; returns true when the slot was newly
-    /// received, false when it was already received or the input is invalid.
     pub fn fill(
         &mut self,
         timestep: usize,

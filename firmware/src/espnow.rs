@@ -1,17 +1,4 @@
-//! ESP-NOW peer-to-peer transport for the CESTA neighbor exchange.
-//!
-//! Carries the binary frames from `exchange` directly between nodes over
-//! ESP-NOW action frames, so the request/response protocol runs without a
-//! broker. ESP-NOW limits a single packet to 250 bytes, while a full-window
-//! dense response can reach ~16 KB, so frames are split into fragments:
-//!
-//! Fragment header (little-endian): magic `CF` u16 | frame_id u16 |
-//! fragment index u8 | fragment count u8 | chunk payload
-//!
-//! The worker thread owns reassembly, request/response draining, and sending;
-//! the Wi-Fi task callback only copies raw packets into a queue. Peers are
-//! static, taken from `config::NEIGHBORS` MAC addresses, unencrypted, and
-//! send on the channel of the station interface (channel 0 = current).
+//! ESP-NOW peer-to-peer transport for the neighbor exchange.
 
 use std::collections::HashMap;
 use std::sync::mpsc::{Receiver, Sender, channel};
@@ -32,15 +19,12 @@ const FRAG_MAGIC: [u8; 2] = *b"CF";
 const FRAG_HEADER_BYTES: usize = 6;
 const MAX_PACKET_BYTES: usize = 250;
 const FRAG_CHUNK_BYTES: usize = MAX_PACKET_BYTES - FRAG_HEADER_BYTES;
-/// Largest exchange frame the fragment layer carries; count fits in one byte.
 const MAX_FRAME_BYTES: usize = 255 * FRAG_CHUNK_BYTES;
-/// Drop incomplete frames after this long; `EXCHANGE_WAIT_MS` bounds interest.
 const REASSEMBLY_TIMEOUT: Duration = Duration::from_millis(2_000);
 const MAX_PARTIAL_FRAMES: usize = 8;
 
 type Mac = [u8; 6];
 
-/// One outbound exchange frame addressed to a peer MAC.
 pub struct EspNowJob {
     pub target: Mac,
     pub payload: Vec<u8>,
@@ -56,9 +40,6 @@ struct PartialFrame {
 static RX_QUEUE: Mutex<Option<Sender<(Mac, Vec<u8>)>>> = Mutex::new(None);
 static STARTED: OnceLock<()> = OnceLock::new();
 
-/// Start ESP-NOW and the transport worker; returns the outbound job queue.
-/// Must be called after Wi-Fi has started (ESP-NOW rides the station
-/// interface) and after `exchange::init`.
 pub fn start() -> Sender<EspNowJob> {
     let (sender, receiver) = channel();
     if STARTED.set(()).is_err() {
@@ -120,8 +101,6 @@ fn init_driver() {
     }
 }
 
-/// RX callback executed in the Wi-Fi task; only copies the packet and queues
-/// it for the worker thread.
 unsafe extern "C" fn on_recv(info: *const esp_now_recv_info_t, data: *const u8, data_len: i32) {
     if info.is_null() || data.is_null() || data_len <= 0 {
         return;
@@ -139,7 +118,6 @@ unsafe extern "C" fn on_recv(info: *const esp_now_recv_info_t, data: *const u8, 
     if let Some(queue) = queue.as_ref()
         && queue.send((mac, packet)).is_err()
     {
-        // Worker is gone; nothing more to do.
     }
 }
 
@@ -175,8 +153,6 @@ fn run(jobs: Receiver<EspNowJob>, rx: Receiver<(Mac, Vec<u8>)>) {
     }
 }
 
-/// Feed one received fragment into the reassembly table; returns the
-/// reassembled exchange frame once all of its fragments have arrived.
 fn reassemble(
     partials: &mut HashMap<(Mac, u16), PartialFrame>,
     src: Mac,
@@ -257,7 +233,6 @@ fn reassemble(
     Some(frame)
 }
 
-/// Fragment and send one exchange frame to a peer.
 fn send_frame(target: &Mac, frame_id: u16, payload: &[u8]) {
     if payload.len() > MAX_FRAME_BYTES {
         error!(

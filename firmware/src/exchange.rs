@@ -1,24 +1,4 @@
-//! Binary neighbor exchange protocol for distributed CESTA node inference.
-//!
-//! The protocol preserves CESTA's receiver-local request, neighbor-response
-//! contract: a receiver sends thresholded per-timestep requests directly to
-//! each requested sender, and senders answer from their most recent cached
-//! hidden state for the requested timesteps only. Responses carry the
-//! receiver's window id so late responses are dropped; senders serve windows
-//! from their own latest inference pass, so payload alignment is approximate
-//! when devices sample out of phase.
-//!
-//! Frames are self-describing (they carry the sender's device id), so the
-//! transport only needs to deliver raw bytes between peers; see `espnow.rs`.
-//!
-//! Wire format (little-endian):
-//! - request: `CESTR` | version | id_len | requester id | window_id u64 |
-//!   count u16 | timesteps u16[]
-//! - response: `CESTP` | version | id_len | responder id | window_id u64 |
-//!   count u16 | timesteps u16[] | hidden f32[] | features f32[]
-//!
-//! A response with count 0 explicitly reports that the sender has no cached
-//! window available.
+//! Binary neighbor exchange protocol for distributed node inference.
 
 use std::collections::VecDeque;
 use std::sync::{Mutex, OnceLock};
@@ -71,8 +51,6 @@ pub struct Response {
     pub features: Vec<f32>,
 }
 
-/// Initialize the shared exchange state; call once before the transport
-/// starts and before any frame is handled.
 pub fn init(window_size: usize, hidden_size: usize, features_per_node: usize) {
     let _ = STATE.set(SharedState {
         window_size,
@@ -95,7 +73,6 @@ fn state() -> Option<&'static SharedState> {
     STATE.get()
 }
 
-/// Route a received transport frame into the exchange; drops unknown frames.
 pub fn handle_frame(data: &[u8]) {
     if let Some(request) = decode_request(data) {
         info!(
@@ -126,8 +103,6 @@ pub fn handle_frame(data: &[u8]) {
     }
 }
 
-/// Publish the latest local hidden state and features for request responses.
-/// Returns the window id the cached state is valid for.
 pub fn update_cache(hidden: &[f32], features: &[f32]) -> u64 {
     let Some(state) = state() else {
         return 0;
@@ -150,8 +125,6 @@ fn cache_window_id(state: &SharedState) -> u64 {
     state.cache.lock().map(|cache| cache.window_id).unwrap_or(0)
 }
 
-/// Answer pending requests from the cached hidden state; returns
-/// `(requester device id, payload)` pairs for the transport worker to send.
 pub fn serve_pending_requests() -> Vec<(String, Vec<u8>)> {
     let Some(state) = state() else {
         return Vec::new();
@@ -213,8 +186,6 @@ pub fn serve_pending_requests() -> Vec<(String, Vec<u8>)> {
         .collect()
 }
 
-/// Drain collected responses for the diagnosis cycle; late or foreign-window
-/// responses are dropped by the caller via window-id matching.
 pub fn take_responses() -> Vec<Response> {
     let Some(state) = state() else {
         return Vec::new();

@@ -1,6 +1,6 @@
 # Firmware
 
-ESP32-S3 firmware that turns each board into a distributed CESTA node. Every node samples a DHT11 sensor, encodes its local 60-sample window with an exported TensorFlow Lite Micro model, requests selected hidden-state payloads from its neighbors directly over ESP-NOW (no broker), aggregates the replies, and publishes readings and per-timestep `NORMAL`/`SPIKE`/`DRIFT`/`STUCK` diagnoses over MQTT.
+ESP32-S3 firmware that turns each board into a distributed CESTA node. Every node samples a DHT11 sensor, encodes its local 60-sample window with an exported TensorFlow Lite Micro model, requests selected hidden-state payloads from its neighbors directly over ESP-NOW, aggregates the replies, and publishes readings and per-timestep `NORMAL`/`SPIKE`/`DRIFT`/`STUCK` diagnoses over MQTT.
 
 ## Hardware and toolchain requirements
 
@@ -15,30 +15,28 @@ One firmware image is built per deployed node. Edit `src/config.rs`:
 |---|---|
 | `WIFI_SSID` / `WIFI_PASSWORD` | Station credentials (ESP-NOW rides the station interface) |
 | `MQTT_SERVER` / `MQTT_PORT` / `MQTT_USER` / `MQTT_PASSWORD` | Telemetry broker |
-| `DEVICE_ID` | Unique node name; used in topics and exchange frames |
-| `NODE_INDEX` | Graph node index; must match the export's `--receiver-index` |
-| `NEIGHBORS` | Graph senders in `sender_indices` order: `device_id`, `node_index`, and station MAC (every node logs its own MAC at boot) |
+| `DEVICE_ID` | Unique node name |
+| `NODE_INDEX` | Graph node index |
+| `NEIGHBORS` | Graph senders in `sender_indices` order: `device_id`, `node_index`, and station MAC |
 | `DHT_PIN` | Sensor pin |
 | `INFERENCE_ENABLED` / `INFERENCE_TENSOR_ARENA_BYTES` | Toggle and size the TFLite Micro arena |
-| `INFERENCE_SYNTHETIC_DIAGNOSTIC` | Run serial-only synthetic inference at boot; set `false` for sensor/radio operation |
+| `INFERENCE_SYNTHETIC_DIAGNOSTIC` | Run serial-only synthetic inference at boot |
 | `NTP_SERVER` and timing | SNTP clock sync for timestamps |
 | `EXCHANGE_WAIT_MS` / `EXCHANGE_POLL_MS` | Diagnosis-cycle exchange deadline and worker poll interval |
-| `FAULT_CONFIG` | Fault profile (see below) |
+| `FAULT_CONFIG` | Fault profile  |
 
 ## Fault profiles
 
 `FAULT_CONFIG` supports one profile per fault type in the main codebase:
 
 - `FAULT_NORMAL` — unmodified readings.
-- `FAULT_SPIKE` — constant offset per event with magnitude sampled from `spike_magnitude_range` °C and a random sign, over consecutive events of `event_duration_samples` samples. Mirrors `SpikeFaultInjector` in the Python codebase.
-- `FAULT_DRIFT` — linear drift of `drift_rate` °C per sample with a random direction per event, over consecutive events of `event_duration_samples` samples. Mirrors `DriftFaultInjector` in the Python codebase.
-- `FAULT_STUCK` — freezes at the first reading of each event with Gaussian jitter of `jitter_std` °C. Mirrors `StuckFaultInjector`.
+- `FAULT_SPIKE` — constant offset per event with magnitude sampled from `spike_magnitude_range` °C and a random sign, over consecutive events of `event_duration_samples` samples.
+- `FAULT_DRIFT` — linear drift of `drift_rate` °C per sample with a random direction per event, over consecutive events of `event_duration_samples` samples.
+- `FAULT_STUCK` — freezes at the first reading of each event with Gaussian jitter of `jitter_std` °C.
 
 ## Model export
 
 Export a trained checkpoint before flashing.
-
-The exporter splits concatenations into groups of at most 10 inputs after conversion, matching the esp-tflite-micro 1.3.5 kernel limit. It checks the rewritten artifact's operators, shapes, and numerical parity, including nonzero node inputs with missing, partial, and full neighbor payloads.
 
 ```bash
 # From the repository root
@@ -61,18 +59,10 @@ Export targets:
 ```bash
 cd firmware
 cargo check
-# After editing components/cesta_tflite/, force ESP-IDF component rebuilding:
 touch sdkconfig.defaults
 cargo build --release
 espflash flash target/xtensa-esp32s3-espidf/release/cesta-firmware --monitor
 ```
-
-## Synthetic hardware diagnostic
-
-Set `INFERENCE_SYNTHETIC_DIAGNOSTIC = true` in `src/config.rs`, build, and flash to exercise the trained node model without a DHT sensor or network. This mode is enabled for the current hardware test. It feeds complete 60-sample normal, spike, drift, and stuck windows, runs receiver-local request passes, then aggregate passes with missing neighbors and synthetic loopback replies for requested timesteps. Serial lines prefixed `[SYNTHETIC]` report class probabilities, latency, and received counts. A final `PASS` requires finite hidden states and request probabilities and normalized class probabilities for every timestep; it does not assert diagnosis accuracy or validate ESP-NOW transport. The board idles after completion. Set the flag back to `false` and reflash to resume normal operation.
-
-The C++ bridge logs arena usage at initialization. It time-slices tensor allocation at idle priority and yields periodically between inference operators so long float32 passes allow the idle-task watchdog and other tasks to run.
-
 ## Telemetry
 
 Nodes publish JSON to `cesta/readings/<device_id>`:

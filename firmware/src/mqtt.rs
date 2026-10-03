@@ -1,5 +1,4 @@
-//! MQTT worker: owns the client and publishes queued telemetry. The neighbor
-//! exchange no longer uses MQTT; it runs over ESP-NOW (see `espnow.rs`).
+//! MQTT worker.
 
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::thread;
@@ -16,7 +15,6 @@ pub struct PublishJob {
     pub payload: Vec<u8>,
 }
 
-/// Start the MQTT worker and return the publish queue.
 pub fn start() -> Sender<PublishJob> {
     let (sender, receiver) = channel();
     thread::Builder::new()

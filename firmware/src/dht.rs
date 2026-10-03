@@ -26,9 +26,6 @@ impl<'a> Dht11Sensor<'a> {
         Self { pin: driver }
     }
 
-    /// Read one temperature/humidity sample. When `checksum_enabled` is
-    /// false, frames with a mismatched checksum still decode (intended for
-    /// fault profiles with a deliberately disturbed DATA line).
     pub fn read(&mut self, checksum_enabled: bool) -> Result<DhtReading, DhtError> {
         let mut data = [0u8; 5];
 

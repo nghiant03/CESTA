@@ -1,4 +1,4 @@
-//! Explicit synthetic-input hardware diagnostic; no sensor or radio data.
+//! Explicit synthetic-input hardware diagnostic.
 
 use std::thread;
 use std::time::Duration;

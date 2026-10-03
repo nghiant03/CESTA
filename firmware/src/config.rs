@@ -1,31 +1,22 @@
-//! Static node configuration: network credentials, graph identity
-//! (`NODE_INDEX`, `NEIGHBORS`), inference sizing, timing, and the fault
-//! profile. One firmware image is built per deployed node.
+//! Static node configuration.
 
 #![allow(dead_code)]
 
 use crate::fault::{FaultConfig, FaultMode};
 
-pub const WIFI_SSID: &str = "YOUR_WIFI_NAME";
-pub const WIFI_PASSWORD: &str = "YOUR_WIFI_PASSWORD";
+pub const WIFI_SSID: &str = "Wifi Guest";
+pub const WIFI_PASSWORD: &str = "2222288888";
 
-pub const MQTT_SERVER: &str = "YOUR_SERVER_IP";
+pub const MQTT_SERVER: &str = "192.168.0.145";
 pub const MQTT_PORT: u16 = 1883;
 pub const MQTT_USER: &str = "";
 pub const MQTT_PASSWORD: &str = "";
 
-pub const DEVICE_ID: &str = "esp32_X";
+pub const DEVICE_ID: &str = "esp32_01";
 pub const MQTT_TOPIC_PREFIX: &str = "cesta/readings/";
 
-/// Graph node index of this device; must match the `--receiver-index` of the
-/// exported node model in `firmware/model/model.json`.
 pub const NODE_INDEX: usize = 0;
 
-/// Graph senders of this device in `sender_indices` order: the devices this node
-/// may request hidden-state payloads from. Each `device_id` must match the
-/// neighbor's `DEVICE_ID`, each `node_index` must match the exported model's
-/// `sender_indices`, and each `mac` must be the neighbor's station MAC (logged
-/// by every node at boot as "[ESPNOW] own MAC ...").
 pub const NEIGHBORS: [Neighbor; 2] = [
     Neighbor {
         device_id: "esp32_Y",
@@ -39,22 +30,16 @@ pub const NEIGHBORS: [Neighbor; 2] = [
     },
 ];
 
-/// Time the diagnosis cycle waits for all requested neighbor payloads.
 pub const EXCHANGE_WAIT_MS: u64 = 1500;
 
-/// Poll interval of the ESP-NOW and MQTT worker loops and of the response
-/// collection loop.
 pub const EXCHANGE_POLL_MS: u64 = 50;
 
-/// MQTT in/out buffer size for telemetry JSON.
 pub const MQTT_BUFFER_BYTES: usize = 8 * 1024;
 
 pub const DHT_PIN: i32 = 5;
 pub const SEND_INTERVAL_SECS: u64 = 3;
 
 pub const INFERENCE_ENABLED: bool = true;
-/// Hardware diagnostic only: deterministic synthetic windows and loopback
-/// payloads, with serial results. Bypasses DHT, Wi-Fi, ESP-NOW, and MQTT.
 pub const INFERENCE_SYNTHETIC_DIAGNOSTIC: bool = true;
 pub const INFERENCE_TENSOR_ARENA_BYTES: usize = 2 * 1024 * 1024;
 
@@ -62,7 +47,6 @@ pub const NTP_SERVER: &str = "vn.pool.ntp.org";
 pub const NTP_SYNC_TIMEOUT_SECS: u64 = 5;
 pub const NTP_SYNC_POLL_MS: u64 = 500;
 
-/// Active fault profile for this node; select one of the presets below.
 pub const FAULT_CONFIG: FaultConfig = FAULT_NORMAL;
 
 pub const FAULT_NORMAL: FaultConfig = FaultConfig {
@@ -75,9 +59,6 @@ pub const FAULT_NORMAL: FaultConfig = FaultConfig {
     event_duration_samples: 0,
 };
 
-/// Software-injected spike on the normal sensor reading. Defaults mirror the
-/// SPIKE injector in `src/CESTA/schema/fault.py`: offset magnitude sampled in
-/// 1.0..4.0 °C with a random sign per event, over ~2-sample events.
 pub const FAULT_SPIKE: FaultConfig = FaultConfig {
     mode: FaultMode::Spike,
     read_pin: DHT_PIN,
@@ -88,9 +69,6 @@ pub const FAULT_SPIKE: FaultConfig = FaultConfig {
     event_duration_samples: 2,
 };
 
-/// Software-injected linear drift on the normal sensor reading. Defaults
-/// mirror the DRIFT injector in `src/CESTA/schema/fault.py`: rate sampled in
-/// 0.05..0.15 °C per sample (0.1 midpoint here) over ~20-sample events.
 pub const FAULT_DRIFT: FaultConfig = FaultConfig {
     mode: FaultMode::Drift,
     read_pin: DHT_PIN,
@@ -101,9 +79,6 @@ pub const FAULT_DRIFT: FaultConfig = FaultConfig {
     event_duration_samples: 20,
 };
 
-/// Software-injected stuck-at-value fault on the normal sensor reading.
-/// Defaults mirror the STUCK injector in `src/CESTA/schema/fault.py`:
-/// ~10-sample events frozen at the event's first reading with small jitter.
 pub const FAULT_STUCK: FaultConfig = FaultConfig {
     mode: FaultMode::Stuck,
     read_pin: DHT_PIN,
@@ -118,6 +93,5 @@ pub const FAULT_STUCK: FaultConfig = FaultConfig {
 pub struct Neighbor {
     pub device_id: &'static str,
     pub node_index: usize,
-    /// Station MAC address of the neighbor, used for direct ESP-NOW exchange.
     pub mac: [u8; 6],
 }

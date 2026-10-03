@@ -13,8 +13,6 @@
 #include "tensorflow/lite/micro/micro_profiler_interface.h"
 #include "tensorflow/lite/schema/schema_generated.h"
 
-// Use operator-boundary hooks to let idle/network tasks run during long float
-// inference passes. No profiling records or watchdog suppression are needed.
 class CooperativeScheduler : public tflite::MicroProfilerInterface {
 public:
     uint32_t BeginEvent(const char *) override { return 0; }
@@ -128,8 +126,7 @@ extern "C" cesta_tflite_t *cesta_tflite_create(const unsigned char *model_data, 
         classifier->error = "failed to create TensorFlow Lite interpreter";
         return classifier;
     }
-    // The one-time greedy memory planner has no operator hooks. Time-slice it
-    // with the idle task, then restore the caller's normal priority.
+
     const UBaseType_t priority = uxTaskPriorityGet(nullptr);
     vTaskPrioritySet(nullptr, tskIDLE_PRIORITY);
     const TfLiteStatus allocation_status = classifier->interpreter->AllocateTensors();
