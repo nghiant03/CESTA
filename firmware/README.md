@@ -63,6 +63,40 @@ touch sdkconfig.defaults
 cargo build --release
 espflash flash target/xtensa-esp32s3-espidf/release/cesta-firmware --monitor
 ```
+
+### Troubleshooting: Crash during PSRAM startup
+
+If PSRAM startup crashes, edit `firmware/sdkconfig.defaults`. Add/uncomment:
+
+```ini
+CONFIG_ESPTOOLPY_FLASHMODE_QIO=y
+CONFIG_ESPTOOLPY_FLASHFREQ_40M=y
+CONFIG_SPIRAM_SPEED_40M=y
+CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y
+```
+
+Comment out competing selections if present:
+
+```ini
+# CONFIG_ESPTOOLPY_FLASHMODE_DIO=y
+# CONFIG_ESPTOOLPY_FLASHMODE_QOUT=y
+# CONFIG_ESPTOOLPY_FLASHMODE_DOUT=y
+# CONFIG_ESPTOOLPY_FLASHFREQ_80M=y
+# CONFIG_SPIRAM_SPEED_80M=y
+```
+
+Keep `CONFIG_SPIRAM=y`, `CONFIG_SPIRAM_MODE_OCT=y`, `CONFIG_SPIRAM_BOOT_INIT=y`, and `CONFIG_SPIRAM_MEMTEST=y`. QIO selects **flash** mode, not PSRAM mode. Rebuild from `firmware/` and flash the matching bootloader:
+
+```bash
+touch sdkconfig.defaults
+cargo build --release
+espflash flash --port <serial-port> --bootloader <bootloader.bin> \
+  --flash-size 8mb --flash-mode dio --flash-freq 40mhz \
+  --monitor target/xtensa-esp32s3-espidf/release/cesta-firmware
+```
+
+Use `target/xtensa-esp32s3-espidf/release/build/esp-idf-sys-<build-id>/out/build/bootloader/bootloader.bin`.
+
 ## Telemetry
 
 Nodes publish JSON to `cesta/readings/<device_id>`:
