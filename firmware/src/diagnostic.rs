@@ -10,15 +10,22 @@ pub fn run() -> ! {
     log::warn!(
         "[SYNTHETIC] Diagnostic mode: fake windows and loopback payloads; radio and sensor disabled"
     );
-    let result = run_cases();
-    match result {
-        Ok(()) => log::info!(
-            "[SYNTHETIC] PASS: all request and aggregate passes returned valid probabilities"
-        ),
-        Err(error) => log::error!("[SYNTHETIC] FAIL: {}", error),
-    }
-    loop {
+    for remaining in (1..=15).rev() {
+        log::info!(
+            "[SYNTHETIC] Booted; inference starts in {} seconds",
+            remaining
+        );
         thread::sleep(Duration::from_secs(1));
+    }
+    let result = run_cases();
+    loop {
+        match &result {
+            Ok(()) => log::info!(
+                "[SYNTHETIC] PASS: all request and aggregate passes returned valid probabilities"
+            ),
+            Err(error) => log::error!("[SYNTHETIC] FAIL: {}", error),
+        }
+        thread::sleep(Duration::from_secs(5));
     }
 }
 

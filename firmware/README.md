@@ -20,7 +20,7 @@ One firmware image is built per deployed node. Edit `src/config.rs`:
 | `NEIGHBORS` | Graph senders in `sender_indices` order: `device_id`, `node_index`, and station MAC |
 | `DHT_PIN` | Sensor pin |
 | `INFERENCE_ENABLED` / `INFERENCE_TENSOR_ARENA_BYTES` | Toggle and size the TFLite Micro arena |
-| `INFERENCE_SYNTHETIC_DIAGNOSTIC` | Run serial-only synthetic inference at boot |
+| `INFERENCE_SYNTHETIC_DIAGNOSTIC` | Set `true` for serial-only synthetic testing; keep `false` for normal operation |
 | `NTP_SERVER` and timing | SNTP clock sync for timestamps |
 | `EXCHANGE_WAIT_MS` / `EXCHANGE_POLL_MS` | Diagnosis-cycle exchange deadline and worker poll interval |
 | `FAULT_CONFIG` | Fault profile  |
