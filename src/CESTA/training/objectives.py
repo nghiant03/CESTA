@@ -35,11 +35,30 @@ def apply_training_objective(
     node_mask: torch.Tensor | None,
 ) -> torch.Tensor:
     loss = add_auxiliary_loss(config, model, loss)
+    loss = add_local_ce_loss(config, model, loss, targets, node_mask)
     loss = add_voi_gate_loss(config, model, loss, targets, node_mask)
     loss = add_counterfactual_voi_loss(config, model, loss, targets, node_mask)
     loss = add_boundary_loss(config, model, loss, targets, node_mask)
     loss = add_crf_loss(config, model, loss, logits, targets, node_mask)
     return add_persistent_transition_loss(config, model, loss)
+
+
+def add_local_ce_loss(
+    config: TrainConfig,
+    model: BaseModel,
+    loss: torch.Tensor,
+    targets: torch.Tensor,
+    node_mask: torch.Tensor | None,
+) -> torch.Tensor:
+    if config.local_ce_loss_weight == 0.0:
+        return loss
+    local_logits = getattr(model, "local_logits", None)
+    if not isinstance(local_logits, torch.Tensor):
+        raise ValueError("Local CE supervision requires model.local_logits from the current forward pass")
+    valid = targets >= 0
+    if node_mask is not None:
+        valid = valid & node_mask
+    return loss + config.local_ce_loss_weight * masked_loss(nn.CrossEntropyLoss(), local_logits, targets, valid)
 
 
 def add_auxiliary_loss(

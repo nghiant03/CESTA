@@ -45,6 +45,17 @@ def run_training(
     logger.info("Loading data from: {}", data)
     dataset = load_dataset(data)
     dataset.print_summary()
+    teacher_paths = [Path(p) for p in (config.distillation_teachers or [config.distillation_teacher or ""])]
+    if config.distillation_weight > 0 or config.distillation_local_weight > 0:
+        import json
+
+        from CESTA.utils import sha256_file
+
+        for teacher_path in teacher_paths:
+            teacher_manifest = json.loads((teacher_path / "manifest.json").read_text())
+            for filename, key in (("dataset.csv", "data_sha256"), ("dataset_meta.json", "meta_sha256")):
+                if sha256_file(data / filename) != teacher_manifest["dataset"][key]:
+                    raise ValueError("Teacher dataset provenance does not match student dataset")
 
     model_cls = get_model_class(config.model)
     requested_metadata = set(model_cls.required_metadata)
@@ -84,11 +95,42 @@ def run_training(
         metadata=prepared.metadata,
         **config.model_kwargs,
     )
+    if config.training_initialization_checkpoint:
+        import json
+
+        from CESTA.utils import sha256_file
+
+        initial = Path(config.training_initialization_checkpoint)
+        previous = json.loads((initial / "manifest.json").read_text())
+        previous_config = TrainConfig.model_validate(previous["train_config"])
+        if previous_config.model_kwargs != config.model_kwargs or previous_config.data != config.data or previous_config.features != config.features:
+            raise ValueError("Training initialization requires identical architecture and data recipe")
+        for filename, key in (("dataset.csv", "data_sha256"), ("dataset_meta.json", "meta_sha256")):
+            if sha256_file(data / filename) != previous["dataset"][key]:
+                raise ValueError("Training initialization dataset mismatch")
+        load_checkpoint_weights(net, initial, map_location="cpu")
+    if config.temporal_transfer_checkpoint:
+        from CESTA.training.transfer import initialize_temporal_transfer
+
+        initialize_temporal_transfer(net, config, data)
     logger.info("Model: {} ({:,} parameters)", net.name, net.count_parameters())
 
     output_root = output if output is not None else Path(f"runs/{config.model}")
     git = collect_git_info()
     run_dir = create_run_dir(output_root, model=config.model, seed=config.seed, git=git)
+    if config.distillation_weight > 0 or config.distillation_local_weight > 0:
+        import json
+
+        from CESTA.utils import sha256_file
+
+        (run_dir / "teacher_provenance.json").write_text(json.dumps({
+            "teachers": [{"path": str(p.resolve()), "hashes": {name: sha256_file(p / name)
+                          for name in ("weight.pt", "config.json", "manifest.json")}} for p in teacher_paths],
+            "current_graph_hashes": {name: sha256_file(data / name) for name in ("graph_edges.npz", "dynamic_link_mask.npz")},
+            "historical_graph_identity_verified": False,
+            "limitation": "Historical manifests lack graph/link hashes or split fingerprints; current hashes cannot prove historical split identity.",
+            "inference_split": "train_only", "incomplete_node_windows": "excluded",
+        }, indent=2))
     run_id = run_dir.name
     logger.info("Run dir: {}", run_dir)
 

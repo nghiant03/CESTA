@@ -31,6 +31,7 @@ from CESTA.training.callbacks import (
     TrainingCallback,
     TrainMetrics,
 )
+from CESTA.training.distillation import distillation_loss, load_teacher
 from CESTA.training.loss import FocalLoss
 from CESTA.training.objectives import (
     add_auxiliary_loss,
@@ -40,6 +41,7 @@ from CESTA.training.objectives import (
     valid_predictions,
 )
 from CESTA.training.oversampling import oversample_split
+from CESTA.training.regularization import augment_training_input, build_optimizer
 
 
 def build_loss(
@@ -174,6 +176,7 @@ class Trainer:
         Returns:
             :class:`TrainResult` with full training history.
         """
+        self.teacher = load_teacher(self.config, self.device)
         seed_everything(self.config.seed)
 
         logger.debug(
@@ -227,12 +230,26 @@ class Trainer:
         num_classes = infer_num_classes(model, X_train, metadata, self.device)
         logger.info("Using device: {}", self.device)
         criterion = build_loss(self.config, self.device)
-        optimizer = torch.optim.Adam(model.parameters(), lr=self.config.learning_rate)
-        logger.debug("Optimizer: Adam(lr={})", self.config.learning_rate)
+        shared_optimizer = build_optimizer(model, self.config) if self.config.local_warmup_preserve_optimizer else None
+        if self.config.local_warmup_epochs:
+            from CESTA.training.warmup import warmup_local_gru
+
+            warmup_local_gru(
+                model, train_loader, self.config, self.device, self.teacher, optimizer=shared_optimizer,
+                criterion=criterion if self.config.local_warmup_use_task_loss else None,
+            )
+        optimizer = shared_optimizer if shared_optimizer is not None else build_optimizer(model, self.config)
+        if self.config.local_warmup_epochs:
+            for group in optimizer.param_groups:
+                group["lr"] *= self.config.joint_learning_rate_scale
+        logger.debug("Optimizer: {}(lr={}, weight_decay={})", self.config.optimizer, self.config.learning_rate, self.config.weight_decay)
+
+        from CESTA.training.schedule import apply_epoch_learning_rate
 
         result = TrainResult()
 
         for epoch in range(1, self.config.epochs + 1):
+            learning_rates = apply_epoch_learning_rate(optimizer, self.config, epoch)
             self._maybe_anneal_gumbel_temperature(model, epoch)
 
             train_loss, train_acc, train_cm, train_diagnostics = self._train_epoch(
@@ -275,6 +292,7 @@ class Trainer:
                 train_expected_energy_ratio=train_diagnostics.get("expected_energy_ratio"),
                 gate_entropy=train_diagnostics.get("gate_entropy"),
                 gate_gradient_norm=train_diagnostics.get("gate_gradient_norm"),
+                learning_rates=learning_rates,
             )
             result.history.append(metrics)
 
@@ -430,9 +448,12 @@ class Trainer:
         gate_entropy_total = 0.0
         gate_gradient_norm_total = 0.0
         diagnostic_batches = 0
+        protection_diagnostics: list[dict[str, float]] = []
+        retention_counts: torch.Tensor | None = None
 
         for batch in loader:
             model_input, y_batch, node_mask, batch_size = prepare_batch(batch, self.device)
+            model_input = augment_training_input(model_input, self.config)
 
             optimizer.zero_grad()
             logits = model(model_input)
@@ -446,8 +467,43 @@ class Trainer:
                 y_batch,
                 node_mask,
             )
+            paper_loss = loss
+            if self.teacher is not None:
+                target_cache: dict[str, torch.Tensor] = {}
+                loss = loss + self.config.distillation_weight * distillation_loss(
+                    self.teacher, model_input, logits, y_batch, self.config.distillation_temperature,
+                    self.config.distillation_drift_weight, target_cache, self.config.distillation_correct_only,
+                )
+                if self.config.distillation_local_weight > 0:
+                    local_logits = getattr(model, "local_logits", None)
+                    if not isinstance(local_logits, torch.Tensor):
+                        raise ValueError("Local distillation requires local logits")
+                    loss = loss + self.config.distillation_local_weight * distillation_loss(
+                        self.teacher, model_input, local_logits, y_batch, self.config.distillation_temperature,
+                    self.config.distillation_drift_weight, target_cache, self.config.distillation_correct_only,
+                    )
+                retained = target_cache.get("retention_counts")
+                if retained is not None:
+                    retention_counts = retained.clone() if retention_counts is None else retention_counts + retained
             expected_energy = getattr(model, "communication_energy_loss", None)
-            loss.backward()
+            if not torch.isfinite(loss).all():
+                raise FloatingPointError("Nonfinite training loss; optimizer update aborted")
+            if self.teacher is not None and self.config.distillation_task_protection:
+                from CESTA.training.gradient_protection import protected_backward
+
+                encoder = getattr(model, "temporal_encoder", None)
+                classifier = getattr(model, "classifier", None)
+                if not isinstance(encoder, nn.Module) or not isinstance(classifier, nn.Module):
+                    raise ValueError("Task-protected KD requires shared temporal encoder and classifier")
+                protection_diagnostics.append(protected_backward(
+                    paper_loss, loss - paper_loss, [*encoder.parameters(), *classifier.parameters()],
+                ))
+            else:
+                loss.backward()
+            gradients = [parameter.grad for parameter in model.parameters() if parameter.grad is not None]
+            if gradients and not torch.stack([torch.isfinite(gradient).all() for gradient in gradients]).all():
+                optimizer.zero_grad(set_to_none=True)
+                raise FloatingPointError("Nonfinite training gradients; optimizer update aborted")
             gate_gradient_norm = self._gate_gradient_norm(model)
             optimizer.step()
 
@@ -468,6 +524,13 @@ class Trainer:
             all_preds.append(valid_preds.detach().cpu())
             all_targets.append(valid_targets.detach().cpu())
 
+        if protection_diagnostics:
+            logger.info("KD protection epoch averages: {}", {
+                key: sum(row[key] for row in protection_diagnostics) / len(protection_diagnostics)
+                for key in protection_diagnostics[0]
+            })
+        if retention_counts is not None:
+            logger.info("Correct-only KD accepted/possible counts per class: {}", retention_counts.tolist())
         avg_loss = total_loss / max(len(loader.dataset), 1)  # type: ignore[arg-type]
         accuracy = correct / max(total, 1)
         diagnostics = {

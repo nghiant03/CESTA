@@ -49,6 +49,7 @@ class TrainMetrics:
     train_expected_energy_ratio: float | None = None
     gate_entropy: float | None = None
     gate_gradient_norm: float | None = None
+    learning_rates: list[float] | None = None
 
 
 class TrainingCallback(ABC):

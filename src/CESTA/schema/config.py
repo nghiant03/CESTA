@@ -163,6 +163,13 @@ class TrainConfig(BaseModel):
     epochs: int = Field(default=100, ge=1)
     batch_size: int = Field(default=32, ge=1)
     learning_rate: float = Field(default=0.001, gt=0.0)
+    learning_rate_schedule: Literal["none", "late_cosine"] = "none"
+    learning_rate_schedule_start_epoch: int | None = Field(default=None, ge=1)
+    learning_rate_final: float | None = Field(default=None, gt=0.0, allow_inf_nan=False)
+    optimizer: Literal["adam", "adamw"] = "adam"
+    weight_decay: float = Field(default=0.0, ge=0.0, allow_inf_nan=False)
+    augmentation_scale: float = Field(default=0.0, ge=0.0, lt=1.0)
+    augmentation_offset: float = Field(default=0.0, ge=0.0, allow_inf_nan=False)
     use_focal_loss: bool = False
     focal_gamma: float = Field(default=2.0, ge=0.0)
     focal_alpha: list[float] | None = None
@@ -173,6 +180,21 @@ class TrainConfig(BaseModel):
     target_request_ratio: float = Field(default=0.3, ge=0.0, le=1.0)
     target_energy_ratio: float = Field(default=0.5, ge=0.0, le=1.0)
     gate_entropy_weight: float = Field(default=0.0, ge=0.0)
+    training_initialization_checkpoint: str | None = None
+    local_warmup_preserve_optimizer: bool = False
+    local_warmup_use_task_loss: bool = False
+    local_warmup_epochs: int = Field(default=0, ge=0)
+    joint_learning_rate_scale: float = Field(default=1.0, gt=0.0, le=1.0)
+    temporal_transfer_checkpoint: str | None = None
+    distillation_correct_only: bool = False
+    distillation_task_protection: bool = False
+    distillation_local_weight: float = Field(default=0.0, ge=0.0, allow_inf_nan=False)
+    distillation_teacher: str | None = None
+    distillation_teachers: list[str] = Field(default_factory=list)
+    distillation_drift_weight: float = Field(default=1.0, ge=1.0, allow_inf_nan=False)
+    distillation_weight: float = Field(default=0.0, ge=0.0, allow_inf_nan=False)
+    distillation_temperature: float = Field(default=2.0, gt=0.0, allow_inf_nan=False)
+    local_ce_loss_weight: float = Field(default=0.0, ge=0.0)
     voi_gate_loss_weight: float = Field(default=0.0, ge=0.0)
     counterfactual_voi_loss_weight: float = Field(default=0.0, ge=0.0)
     counterfactual_voi_penalty_weight: float = Field(default=1.0, ge=0.0)
@@ -211,6 +233,34 @@ class TrainConfig(BaseModel):
                 merged["data"] = data["data"]
             return merged
         return data
+
+    @model_validator(mode="after")
+    def _validate_learning_rate_schedule(self) -> "TrainConfig":
+        if self.learning_rate_schedule == "none":
+            if self.learning_rate_schedule_start_epoch is not None or self.learning_rate_final is not None:
+                raise ValueError("Schedule parameters require an enabled learning-rate schedule")
+        else:
+            if self.learning_rate_schedule_start_epoch is None or self.learning_rate_schedule_start_epoch >= self.epochs:
+                raise ValueError("Schedule start must precede final epoch")
+            if self.learning_rate_final is None or self.learning_rate_final > self.learning_rate:
+                raise ValueError("Final learning rate must be positive and no greater than initial learning rate")
+            if self.local_warmup_epochs or self.joint_learning_rate_scale != 1.0:
+                raise ValueError("Learning-rate schedule is incompatible with warmup or joint learning-rate scaling")
+        return self
+
+    @model_validator(mode="after")
+    def _validate_distillation(self) -> "TrainConfig":
+        if self.distillation_weight > 0 or self.distillation_local_weight > 0:
+            if self.augmentation_scale or self.augmentation_offset:
+                raise ValueError("Distillation is incompatible with augmentation")
+            if not self.distillation_teacher and not self.distillation_teachers:
+                raise ValueError("Distillation requires teacher checkpoints")
+            if self.distillation_teacher and self.distillation_teachers:
+                raise ValueError("Use singular teacher or teacher list, not both")
+            if len(set(self.distillation_teachers)) != len(self.distillation_teachers):
+                raise ValueError("Duplicate teacher paths")
+        return self
+
 
 class EvaluateConfig(BaseModel):
     """Configuration for model evaluation.
