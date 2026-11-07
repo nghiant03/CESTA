@@ -8,6 +8,8 @@ Reference:
     Lin et al., "Focal Loss for Dense Object Detection", ICCV 2017.
 """
 
+from __future__ import annotations
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -51,14 +53,9 @@ class FocalLoss(nn.Module):
             Scalar loss (or per-sample if ``reduction="none"``).
         """
         log_probs = F.log_softmax(inputs, dim=-1)
-        probs = log_probs.exp()
-
-        targets_one_hot = F.one_hot(targets.long(), num_classes=inputs.size(-1)).float()
-
-        p_t = (probs * targets_one_hot).sum(dim=-1)
-        log_p_t = (log_probs * targets_one_hot).sum(dim=-1)
-
-        focal_weight = (1.0 - p_t) ** self.gamma
+        log_p_t = log_probs.gather(-1, targets.long().unsqueeze(-1)).squeeze(-1)
+        complement = (-log_p_t.expm1()).clamp_min(torch.finfo(log_p_t.dtype).tiny)
+        focal_weight = complement ** self.gamma
         loss = -focal_weight * log_p_t
 
         if self.alpha is not None:
