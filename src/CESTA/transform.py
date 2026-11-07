@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import csv
 from pathlib import Path
 from typing import Any
 
@@ -25,6 +26,20 @@ def load_directed_edges(
     id_to_idx = {nid: idx for idx, nid in enumerate(node_ids)}
     edges: list[tuple[int, int]] = []
     probs: list[float] = []
+    if connectivity_path.suffix.lower() == ".csv":
+        with connectivity_path.open(newline="") as fh:
+            reader = csv.DictReader(fh)
+            if reader.fieldnames != ["node_a", "node_b"]:
+                raise ValueError("Unweighted graph CSV requires node_a,node_b columns")
+            seen: set[tuple[int, int]] = set()
+            for row in reader:
+                sender, receiver = int(row["node_a"]), int(row["node_b"])
+                pair = (min(sender, receiver), max(sender, receiver))
+                if sender == receiver or sender not in id_to_idx or receiver not in id_to_idx or pair in seen:
+                    raise ValueError(f"Invalid or duplicate undirected edge: {sender}, {receiver}")
+                seen.add(pair)
+                edges.extend([(id_to_idx[sender], id_to_idx[receiver]), (id_to_idx[receiver], id_to_idx[sender])])
+        return np.asarray(edges, dtype=np.int64).reshape(-1, 2).T, np.ones(len(edges), dtype=np.float32)
     with connectivity_path.open() as fh:
         for line in fh:
             parts = line.strip().split()
@@ -173,10 +188,23 @@ def compute_edge_distances(
 def run_transform(dataset_name: str, raw_path: Path, output: Path, config: TransformConfig) -> CESTADataset:
     if config.injection.seed is not None:
         seed_everything(config.injection.seed)
-    resolved_raw_path = raw_path.parent if raw_path.is_file() else raw_path
+    from CESTA.datasets.raw.cesta_dht import CestaDHTDataset
+
+    resolved_raw_path = raw_path if dataset_name.lower() == "cesta_dht" else raw_path.parent if raw_path.is_file() else raw_path
     raw_dataset = get_dataset(dataset_name, resolved_raw_path)
-    injector = FaultInjector(config.injection)
-    df, feature_names = injector.run_to_frame(raw_dataset)
+    provided_labels = isinstance(raw_dataset, CestaDHTDataset)
+    if provided_labels:
+        if config.injection.group_column != raw_dataset.group_column or config.injection.all_features != raw_dataset.feature_columns:
+            raise ValueError("DHT ingestion requires group_column='moteid' and all_features=['temp', 'humid']")
+        if config.injection.target_features:
+            raise ValueError("DHT readings are already injected; target_features must be empty")
+        if config.graph.connectivity_path is None:
+            raise ValueError("DHT ingestion requires an explicit connectivity_path")
+        df = raw_dataset.preprocess(raw_dataset.load(), config.injection.resample_freq, config.injection.interpolation_method)
+        feature_names = raw_dataset.feature_columns
+    else:
+        injector = FaultInjector(config.injection)
+        df, feature_names = injector.run_to_frame(raw_dataset)
     group_col = config.injection.group_column
     node_ids = sorted(int(g) for g in df[group_col].unique()) if group_col in df.columns else [0]
     timestamps = sorted(df[raw_dataset.timestamp_column].unique()) if raw_dataset.timestamp_column in df.columns else list(range(len(df)))
@@ -185,7 +213,7 @@ def run_transform(dataset_name: str, raw_path: Path, output: Path, config: Trans
     else:
         edge_index = np.empty((2, 0), dtype=np.int64)
         edge_prob = np.empty((0,), dtype=np.float32)
-    link_mask = simulate_bursty_link_mask(
+    link_mask = np.ones((len(timestamps), edge_index.shape[1]), dtype=np.bool_) if provided_labels else simulate_bursty_link_mask(
         len(timestamps),
         edge_index,
         edge_prob,
@@ -198,7 +226,15 @@ def run_transform(dataset_name: str, raw_path: Path, output: Path, config: Trans
     positions = load_node_positions(config.graph.mote_locs_path, node_ids)
     edge_distance_m, distance_meta = compute_edge_distances(edge_index, node_ids, positions, config.graph.fallback_distance_m)
     graph_meta = {
-        "dynamic_link_seed": config.graph.seed,
+        "label_source": "provided" if provided_labels else "synthetic",
+        "link_source": "static_topology_assumption" if provided_labels else "simulated_bursty",
+        "ingestion": {
+            "device_nodes": CestaDHTDataset.device_nodes,
+            "stream_policy": "fault stream where device has one; otherwise normal; clean pairs retained as reference columns only",
+            "cadence_seconds": 3,
+            "reference_features_used_for_training": False,
+        } if provided_labels else {},
+        "dynamic_link_seed": None if provided_labels else config.graph.seed,
         "timestamps": [str(ts) for ts in timestamps],
         "burst_params": {
             "rho": config.graph.rho,

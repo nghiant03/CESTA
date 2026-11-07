@@ -1,12 +1,16 @@
 """Raw dataset loaders."""
 
+from __future__ import annotations
+
 from pathlib import Path
 
 from CESTA.datasets.raw.base import BaseDataset
+from CESTA.datasets.raw.cesta_dht import CestaDHTDataset
 from CESTA.datasets.raw.intel_lab import IntelLabDataset
 
 _DATASET_LOADERS: dict[str, type[BaseDataset]] = {
     "intel_lab": IntelLabDataset,
+    "cesta_dht": CestaDHTDataset,
 }
 
 
@@ -26,6 +30,7 @@ def list_datasets() -> list[str]:
 
 __all__ = [
     "BaseDataset",
+    "CestaDHTDataset",
     "IntelLabDataset",
     "get_dataset",
     "list_datasets",

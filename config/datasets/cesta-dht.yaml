@@ -1,0 +1,10 @@
+injection:
+  resample_freq: 3s
+  interpolation_method: none
+  target_features: []
+  all_features: [temp, humid]
+  group_column: moteid
+  seed: 42
+graph:
+  connectivity_path: data/raw/CESTA-DHT/edges.csv
+  fallback_distance_m: 1.0
