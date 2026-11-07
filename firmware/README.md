@@ -1,10 +1,11 @@
 # Firmware
 
-ESP32-S3 firmware that turns each board into a distributed CESTA node. Every node samples a DHT11 sensor, encodes its local 60-sample window with an exported TensorFlow Lite Micro model, requests selected hidden-state payloads from its neighbors directly over ESP-NOW, aggregates the replies, and publishes readings and per-timestep `NORMAL`/`SPIKE`/`DRIFT`/`STUCK` diagnoses over MQTT.
+ESP32-S3 Rust firmware for distributed CESTA diagnosis. Each node samples a DHT11 sensor, encodes a local 60-sample window, exchanges selected neighbor hidden states over ESP-NOW, and publishes readings and per-timestep `NORMAL`/`SPIKE`/`DRIFT`/`STUCK` diagnoses over MQTT.
 
 ## Hardware and toolchain requirements
 
-- ESP32-S3 board with **octal PSRAM** and at least **8 MB flash**. 
+- ESP32-S3 board with **octal PSRAM** and at least **8 MB flash**.
+- Pin ESP-IDF v5.3.6. Configure 8 MB QIO flash and octal PSRAM at 40 MHz, routing large allocations to PSRAM through `sdkconfig.defaults`.
 - Host tools: [`espup`](https://github.com/esp-rs/espup), [`espflash`](https://github.com/esp-rs/espflash), `ldproxy`, and the ESP-IDF host dependencies.
 
 ## Configuration
@@ -27,16 +28,16 @@ One firmware image is built per deployed node. Edit `src/config.rs`:
 
 ## Fault profiles
 
-`FAULT_CONFIG` supports one profile per fault type in the main codebase:
+`src/config.rs` selects one profile per fault type in `schema/fault.py`. Apply faults in `fault.rs` to the normal `DHT_PIN` reading, matching the Python injectors' per-event randomization:
 
-- `FAULT_NORMAL` — unmodified readings.
-- `FAULT_SPIKE` — constant offset per event with magnitude sampled from `spike_magnitude_range` °C and a random sign, over consecutive events of `event_duration_samples` samples.
-- `FAULT_DRIFT` — linear drift of `drift_rate` °C per sample with a random direction per event, over consecutive events of `event_duration_samples` samples.
-- `FAULT_STUCK` — freezes at the first reading of each event with Gaussian jitter of `jitter_std` °C.
+- `FAULT_NORMAL`: unmodified readings.
+- `FAULT_SPIKE`: constant offset per event with magnitude sampled from `spike_magnitude_range` °C and a random sign, over consecutive events of `event_duration_samples` samples.
+- `FAULT_DRIFT`: linear drift of `drift_rate` °C per sample with a random direction per event, over consecutive events of `event_duration_samples` samples.
+- `FAULT_STUCK`: freezes at the first reading of each event with Gaussian jitter of `jitter_std` °C.
 
 ## Model export
 
-Export a trained checkpoint before flashing.
+Export a trained checkpoint before flashing. The exporter checks numerical parity and registered operators and writes metadata beside the model.
 
 ```bash
 # From the repository root
@@ -50,9 +51,20 @@ uv run --isolated \
 
 Export targets:
 
-- `node` (default) — one graph receiver with its sender list; pass the device's graph index as `--receiver-index` and list the same senders in `NEIGHBORS` in `sender_indices` order.
-- `local` — the shared per-sensor temporal encoder and classifier without communication.
-- `graph` — centralized fixed-topology inference for a runtime that supplies every node window.
+- `node` (default): one graph receiver with its sender list; pass the device's graph index as `--receiver-index` and list the same senders in `NEIGHBORS` in `sender_indices` order.
+- `local`: the shared per-sensor temporal encoder and classifier without communication.
+- `graph`: centralized fixed-topology inference for a runtime that supplies every node window.
+
+### Inference and exchange contracts
+
+- Embed `model/model.tflite` and invoke Espressif TensorFlow Lite Micro through the `components/cesta_tflite` C++ bridge.
+- Parse `model.json` and reject exports whose target, receiver, sender list, shapes, or training status do not match `src/config.rs`.
+- Preserve receiver-local requests, neighbor responses, and per-timestep many-to-many diagnosis; do not replace distributed deployment with a local-only classifier. The node artifact consumes the local window and selected neighbor payloads and returns per-timestep probabilities and request decisions.
+- Use binary request/response exchanges directly over ESP-NOW. `espnow.rs` fragments frames into 250-byte packets and reassembles them per peer; its worker serves cached hidden-state rows for requested timesteps and sends queued frames.
+- Peers use the static `NEIGHBORS` station MAC addresses, unencrypted, on the current station channel. MQTT carries telemetry only.
+- Threshold requests at the model's `request_threshold` (evaluation semantics), wait up to `EXCHANGE_WAIT_MS`, then rerun inference with received payloads.
+- Preserve watchdog servicing during long float32 passes: the bridge yields at operator boundaries and temporarily lowers the caller to idle priority during tensor allocation, then restores it.
+- In `main.rs`, construct SNTP from `NTP_SERVER`, not `EspSntp::new_default()`.
 
 ## Build and flash
 
@@ -64,7 +76,15 @@ cargo build --release
 espflash flash target/xtensa-esp32s3-espidf/release/cesta-firmware --monitor
 ```
 
-### Troubleshooting: Crash during PSRAM startup
+After C++ component edits, touch `sdkconfig.defaults` before rebuilding so `esp-idf-sys` reruns CMake; a Rust-only rebuild can retain a stale bridge library.
+
+### Memory safeguards
+
+- Select `CONFIG_ESPTOOLPY_FLASHMODE_QIO=y` and `CONFIG_SPIRAM_MODE_OCT=y` independently. The derived `CONFIG_ESPTOOLPY_FLASHMODE="dio"` and ROM image header are intentional; do not manually change them to `"qio"`.
+- Keep `CONFIG_SPIRAM_MEMTEST=y`, including during startup diagnosis or memory-timing changes. PSRAM identification alone does not validate memory access.
+- Match the flashing tool's flash frequency to the compiled configuration. After memory-configuration changes, verify the resolved build configuration and both normal and synthetic firmware modes.
+
+### Troubleshooting: PSRAM startup crash
 
 If PSRAM startup crashes, edit `firmware/sdkconfig.defaults`. Add/uncomment:
 
@@ -95,13 +115,23 @@ espflash flash --port <serial-port> --bootloader <bootloader.bin> \
   --monitor target/xtensa-esp32s3-espidf/release/cesta-firmware
 ```
 
-Use `target/xtensa-esp32s3-espidf/release/build/esp-idf-sys-<build-id>/out/build/bootloader/bootloader.bin`.
+Use `target/xtensa-esp32s3-espidf/release/build/esp-idf-sys-<build-id>/out/build/bootloader/bootloader.bin`. This project-built bootloader's QIO initialization resolved the tested N16R8 startup failure.
+
+### Synthetic diagnostics and console
+
+Normal builds run the sensor/radio application. Enable synthetic diagnosis only through `INFERENCE_SYNTHETIC_DIAGNOSTIC` in `src/config.rs`, not a Cargo feature. Keep it `false` by default and restore it after testing.
+
+Synthetic mode logs a 15-second startup countdown, runs its cases once, and repeats the final PASS/FAIL every five seconds for serial reconnection. It does not start the normal sensor or radio loop.
+
+Use UART0 at 115200 baud as the primary console and native USB Serial/JTAG as secondary. Prefer the USB-UART bridge for startup and panic capture: ESP32 resets can disconnect native USB and its USB/IP forwarding.
 
 ## Telemetry
 
-Nodes publish JSON to `cesta/readings/<device_id>`:
+Nodes publish JSON to `cesta/readings/<device_id>`. Inference records include per-neighbor timestep counts (`requested`/`received`) and pass latencies:
 
 ```json
 {"device_id": "esp32_01", "timestamp": 1718000000, "temperature": 25.3, "humidity": 60.1, "path": "normal", "fault_mode": "normal", "gpio": 5}
 {"device_id": "esp32_01", "timestamp": 1718000003, "type": "inference", "window_id": 12, "communication_mode": "gumbel_request", "label": "NORMAL", "class": 0, "confidence": 0.98, "probabilities": [0.98, 0.01, 0.0, 0.01], "requested": [["esp32_02", 7]], "received": [["esp32_02", 7]], "request_elapsed_ms": 210, "aggregate_elapsed_ms": 195}
 ```
+
+Lab deployments can collect telemetry with Mosquitto, Telegraf, InfluxDB, and Grafana.
