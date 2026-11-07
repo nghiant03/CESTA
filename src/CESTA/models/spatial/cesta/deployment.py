@@ -18,9 +18,11 @@ class CESTALocalDeploymentModel(nn.Module):
         super().__init__()
         self.temporal_encoder = model.temporal_encoder
         self.classifier = model.classifier
+        self.prepare_temporal_input = model.prepare_temporal_input
 
     def forward(self, features: torch.Tensor) -> torch.Tensor:
         """Return per-timestep probabilities for one sensor window."""
+        features = self.prepare_temporal_input(features)
         hidden, _ = self.temporal_encoder(features)
         return F.softmax(self.classifier(hidden), dim=-1)
 
@@ -64,7 +66,7 @@ class CESTANodeDeploymentModel(nn.Module):
         possible_mask = deployment_input[..., payload_end : payload_end + self.neighbor_count]
         received_mask = deployment_input[..., payload_end + self.neighbor_count :]
 
-        local_hidden, _ = model.temporal_encoder(local_features)
+        local_hidden, _ = model.temporal_encoder(model.prepare_temporal_input(local_features))
         request_mask = self._request_mask(local_hidden, possible_mask)
         neighbor_context = self._aggregate(local_hidden, neighbor_hidden, received_mask)
         fusion_parts = [local_hidden, neighbor_context]
@@ -222,7 +224,7 @@ class CESTADeploymentModel(nn.Module):
             sequence_length,
             model.features_per_node,
         )
-        local_hidden, _ = model.temporal_encoder(local_input)
+        local_hidden, _ = model.temporal_encoder(model.prepare_temporal_input(local_input))
         local_hidden = local_hidden.view(
             batch_size,
             model.num_nodes,

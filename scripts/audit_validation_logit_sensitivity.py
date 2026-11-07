@@ -169,9 +169,13 @@ def _collect_gate_probabilities(model: BaseModel, evaluator: Evaluator, prepared
             local_logits = getattr(model, "local_logits", None)
             if not isinstance(local_logits, torch.Tensor):
                 continue
-            local_hidden = model.temporal_encoder(
-                model_input.x.permute(0, 2, 1, 3).reshape(-1, model_input.x.shape[1], model_input.x.shape[-1])
-            )[0]
+            local_input = model_input.x.permute(0, 2, 1, 3).reshape(-1, model_input.x.shape[1], model_input.x.shape[-1])
+            local_mask = (
+                model_input.node_mask.permute(0, 2, 1).reshape(-1, model_input.x.shape[1])
+                if model_input.node_mask is not None
+                else None
+            )
+            local_hidden = model.temporal_encoder(model.prepare_temporal_input(local_input, local_mask))[0]
             local_hidden = local_hidden.view(model_input.x.shape[0], model.num_nodes, model_input.x.shape[1], -1).permute(0, 2, 1, 3)
             possible = model._possible_message_mask(local_hidden, edge_index=model_input.edge_index, edge_mask=model_input.edge_mask)
             features = model._edge_gate_features(local_hidden, possible, edge_index=model_input.edge_index)

@@ -75,7 +75,18 @@ def load_checkpoint_train_config(path: str | Path) -> dict[str, object] | None:
 
 
 def instantiate_model_from_config(config: dict[str, object], model_cls: type[ModelT]) -> ModelT:
-    return model_cls(**config)
+    # Models explicitly declare descriptive legacy config fields. Never silently
+    # discard arbitrary unknown kwargs: misspelled architecture settings must fail.
+    metadata_fields = getattr(model_cls, "checkpoint_metadata_fields", frozenset())
+    if not isinstance(metadata_fields, frozenset) or not all(isinstance(key, str) for key in metadata_fields):
+        raise TypeError("checkpoint_metadata_fields must be a frozenset of field names")
+    constructor_config = {key: value for key, value in config.items() if key not in metadata_fields}
+    model = model_cls(**constructor_config)
+    resolved = model.get_config()
+    for key in metadata_fields:
+        if key in config and config[key] != resolved.get(key):
+            raise ValueError(f"Checkpoint descriptive metadata disagrees with reconstructed model: {key}")
+    return model
 
 
 def load_checkpoint_weights(model: ModelT, path: str | Path, *, map_location: object | None = None) -> ModelT:

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import math
-from typing import ClassVar, Literal
+from typing import Any, ClassVar, Literal
 
 import torch
 import torch.nn as nn
@@ -33,6 +33,8 @@ class CESTAClassifier(CESTASequenceMixin, CESTACommunicationMixin, BaseModel):
     """
 
     required_metadata: ClassVar[set[str]] = {"graph"}
+    # Descriptive fields retained in get_config for communication audits, not constructor arguments.
+    checkpoint_metadata_fields: ClassVar[frozenset[str]] = frozenset({"graph_edge_count", "gate_input_schema"})
 
     def __init__(
         self,
@@ -69,6 +71,9 @@ class CESTAClassifier(CESTASequenceMixin, CESTACommunicationMixin, BaseModel):
         control_seed: int = 42,
         control_static_topk: int = 1,
         control_local_change_threshold: float = 0.5,
+        standardize_window_features: bool = False,
+        temporal_backend: str = "gru",
+        patchtst_config: dict[str, Any] | None = None,
     ) -> None:
         super().__init__()
         if input_size % num_nodes != 0:
@@ -103,6 +108,17 @@ class CESTAClassifier(CESTASequenceMixin, CESTACommunicationMixin, BaseModel):
         if not 0.0 <= control_local_change_threshold <= 1.0:
             raise ValueError("control_local_change_threshold must be in [0, 1]")
 
+        if temporal_backend not in {"gru", "patchtst", "gru_dilated_conv", "patch_gru"}:
+            raise ValueError("temporal_backend must be gru, patchtst, gru_dilated_conv or patch_gru")
+        if temporal_backend == "patch_gru" and (num_layers != 2 or not bidirectional):
+            raise ValueError("patch_gru requires a two-layer bidirectional GRU")
+        if temporal_backend == "gru_dilated_conv" and (num_layers != 2 or not bidirectional):
+            raise ValueError("gru_dilated_conv replaces layer two of a two-layer bidirectional GRU")
+        if temporal_backend != "patchtst" and patchtst_config:
+            raise ValueError("patchtst_config requires temporal_backend=patchtst")
+        self.temporal_backend = temporal_backend
+        self.patchtst_config = dict(patchtst_config or {})
+        self.standardize_window_features = standardize_window_features
         self.input_size = input_size
         self.num_nodes = num_nodes
         self.features_per_node = input_size // num_nodes
@@ -182,14 +198,32 @@ class CESTAClassifier(CESTASequenceMixin, CESTACommunicationMixin, BaseModel):
         self._edge_index_list: list[list[int]] = edge_index_tensor.tolist()
         self._edge_prob_list: list[float] = edge_prob_tensor.tolist()
 
-        self.temporal_encoder = nn.GRU(
-            input_size=self.features_per_node,
-            hidden_size=hidden_size,
-            num_layers=num_layers,
-            batch_first=True,
-            dropout=dropout if num_layers > 1 else 0.0,
-            bidirectional=bidirectional,
-        )
+        self.temporal_encoder: nn.Module
+        if temporal_backend == "patchtst":
+            from CESTA.models.spatial.cesta.temporal import PatchTSTTemporalEncoder
+
+            self.temporal_encoder = PatchTSTTemporalEncoder(
+                input_size=self.features_per_node,
+                output_size=self.encoder_output_size,
+                **self.patchtst_config,
+            )
+        elif temporal_backend == "patch_gru":
+            from CESTA.models.spatial.cesta.temporal import PatchGRUEncoder
+
+            self.temporal_encoder = PatchGRUEncoder(self.features_per_node, hidden_size, dropout)
+        elif temporal_backend == "gru_dilated_conv":
+            from CESTA.models.spatial.cesta.temporal import GRUDilatedConvEncoder
+
+            self.temporal_encoder = GRUDilatedConvEncoder(self.features_per_node, hidden_size, dropout)
+        else:
+            self.temporal_encoder = nn.GRU(
+                input_size=self.features_per_node,
+                hidden_size=hidden_size,
+                num_layers=num_layers,
+                batch_first=True,
+                dropout=dropout if num_layers > 1 else 0.0,
+                bidirectional=bidirectional,
+            )
         self.dropout = nn.Dropout(dropout)
         self.attention_scale = self.encoder_output_size ** 0.5
         self.W_q = nn.Linear(self.encoder_output_size, self.encoder_output_size, bias=False)
@@ -339,12 +373,29 @@ class CESTAClassifier(CESTASequenceMixin, CESTACommunicationMixin, BaseModel):
             raise ValueError("gumbel_temperature must be positive")
         self.gumbel_temperature = tau
 
+    def prepare_temporal_input(self, features: torch.Tensor, mask: torch.Tensor | None = None) -> torch.Tensor:
+        if not self.standardize_window_features:
+            return features
+        if mask is None:
+            centered = features - features.mean(dim=1, keepdim=True)
+            variance = centered.square().mean(dim=1, keepdim=True)
+            return centered / torch.sqrt(variance + 1e-5)
+        valid = mask.unsqueeze(-1)
+        values = features.masked_fill(~valid, 0.0)
+        count = valid.sum(dim=1, keepdim=True).clamp_min(1).to(features.dtype)
+        mean = values.sum(dim=1, keepdim=True) / count
+        centered = (values - mean).masked_fill(~valid, 0.0)
+        variance = centered.square().sum(dim=1, keepdim=True) / count
+        return centered / torch.sqrt(variance + 1e-5)
+
     def forward(self, x: torch.Tensor | GraphWindowBatch) -> torch.Tensor:
         edge_index: torch.Tensor | None = None
         edge_mask: torch.Tensor | None = None
+        node_mask: torch.Tensor | None = None
         if isinstance(x, GraphWindowBatch):
             edge_index = x.edge_index
             edge_mask = x.edge_mask
+            node_mask = x.node_mask
             self._active_window_ids = x.window_ids
             x = x.x
         else:
@@ -360,7 +411,12 @@ class CESTAClassifier(CESTASequenceMixin, CESTACommunicationMixin, BaseModel):
             batch * self.num_nodes, seq_len, self.features_per_node
         )
 
-        local_hidden, _ = self.temporal_encoder(local_input)
+        local_mask = node_mask.permute(0, 2, 1).reshape(batch * self.num_nodes, seq_len) if node_mask is not None else None
+        temporal_input = self.prepare_temporal_input(local_input, local_mask)
+        if self.temporal_backend == "patch_gru":
+            local_hidden, _ = self.temporal_encoder(temporal_input, mask=local_mask)
+        else:
+            local_hidden, _ = self.temporal_encoder(temporal_input)
         local_hidden = local_hidden.view(
             batch, self.num_nodes, seq_len, self.encoder_output_size
         )
@@ -474,6 +530,9 @@ class CESTAClassifier(CESTASequenceMixin, CESTACommunicationMixin, BaseModel):
 
     def get_config(self) -> dict[str, object]:
         return {
+            "temporal_backend": self.temporal_backend,
+            "patchtst_config": self.patchtst_config,
+            "standardize_window_features": self.standardize_window_features,
             "input_size": self.input_size,
             "num_nodes": self.num_nodes,
             "edge_index": self._edge_index_list,

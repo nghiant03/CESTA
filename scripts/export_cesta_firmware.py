@@ -194,6 +194,8 @@ def load_cesta_checkpoint(path: Path) -> CESTAClassifier:
 
 
 def validate_model(model: CESTAClassifier, target: str) -> None:
+    if model.temporal_backend != "gru":
+        raise ValueError("firmware export currently supports only the GRU temporal backend")
     if model.features_per_node != 1:
         raise ValueError("firmware export requires one feature per node")
     if model.num_classes != 4:
