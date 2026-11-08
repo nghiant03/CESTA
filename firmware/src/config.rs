@@ -49,44 +49,54 @@ pub const NTP_SYNC_POLL_MS: u64 = 500;
 
 pub const FAULT_CONFIG: FaultConfig = FAULT_NORMAL;
 
+pub const NORMAL_TEMPERATURE_SIGMA: [f32; 4] = [
+    0.991493173924548,
+    1.339996615837971,
+    1.4351699959638797,
+    1.2784088857507183,
+];
+
+pub const BASELINE_SIGMA: f32 = {
+    assert!(
+        NODE_INDEX < NORMAL_TEMPERATURE_SIGMA.len(),
+        "Calibration requires dataset nodes 1..4 mapped to NODE_INDEX 0..3"
+    );
+    NORMAL_TEMPERATURE_SIGMA[NODE_INDEX]
+};
+
 pub const FAULT_NORMAL: FaultConfig = FaultConfig {
     mode: FaultMode::Normal,
     read_pin: DHT_PIN,
     bypass_checksum: false,
-    spike_magnitude_range: (0.0, 0.0),
-    drift_rate: 0.0,
-    jitter_std: 0.0,
+    baseline_sigma: BASELINE_SIGMA,
+    spike_magnitude_sigma_range: (0.8, 2.0),
+    spike_magnitude_range: (1.0, 4.0),
+    drift_rate_sigma_range: (0.0125, 0.05),
+    drift_rate_range: (0.03125, 0.09375),
     event_duration_samples: 0,
 };
 
 pub const FAULT_SPIKE: FaultConfig = FaultConfig {
     mode: FaultMode::Spike,
-    read_pin: DHT_PIN,
-    bypass_checksum: false,
-    spike_magnitude_range: (1.0, 4.0),
-    drift_rate: 0.0,
-    jitter_std: 0.0,
     event_duration_samples: 2,
+    ..FAULT_NORMAL
 };
 
 pub const FAULT_DRIFT: FaultConfig = FaultConfig {
     mode: FaultMode::Drift,
-    read_pin: DHT_PIN,
-    bypass_checksum: false,
-    spike_magnitude_range: (0.0, 0.0),
-    drift_rate: 0.1,
-    jitter_std: 0.0,
     event_duration_samples: 20,
+    ..FAULT_NORMAL
 };
 
 pub const FAULT_STUCK: FaultConfig = FaultConfig {
     mode: FaultMode::Stuck,
-    read_pin: DHT_PIN,
-    bypass_checksum: false,
-    spike_magnitude_range: (0.0, 0.0),
-    drift_rate: 0.0,
-    jitter_std: 0.1,
     event_duration_samples: 10,
+    ..FAULT_NORMAL
+};
+
+pub const FAULT_ALL: FaultConfig = FaultConfig {
+    mode: FaultMode::All,
+    ..FAULT_NORMAL
 };
 
 #[derive(Clone, Copy, Debug)]
