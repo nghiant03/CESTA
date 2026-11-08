@@ -9,25 +9,25 @@ pub const WIFI_PASSWORD: &str = "2222288888";
 
 pub const MQTT_SERVER: &str = "192.168.0.145";
 pub const MQTT_PORT: u16 = 1883;
-pub const MQTT_QUEUE_CAPACITY: usize = 16;
 pub const MQTT_USER: &str = "";
 pub const MQTT_PASSWORD: &str = "";
 
-pub const DEVICE_ID: &str = "esp32_01";
+pub const DEVICE_ID: &str = "esp32_04";
 pub const MQTT_TOPIC_PREFIX: &str = "cesta/readings/";
+pub const MQTT_QUEUE_CAPACITY: usize = 16;
 
-pub const NODE_INDEX: usize = 0;
+pub const NODE_INDEX: usize = 3;
 
 pub const NEIGHBORS: [Neighbor; 2] = [
     Neighbor {
-        device_id: "esp32_Y",
-        node_index: 2,
-        mac: [0x00; 6],
+        device_id: "esp32_01",
+        node_index: 0,
+        mac: [0xE0, 0x72, 0xA1, 0xD5, 0x5E, 0x78],
     },
     Neighbor {
-        device_id: "esp32_Z",
-        node_index: 30,
-        mac: [0x00; 6],
+        device_id: "esp32_03",
+        node_index: 2,
+        mac: [0xE0, 0x72, 0xA1, 0xD8, 0xF9, 0x9C],
     },
 ];
 
@@ -39,6 +39,7 @@ pub const MQTT_BUFFER_BYTES: usize = 8 * 1024;
 
 pub const DHT_PIN: i32 = 5;
 pub const SEND_INTERVAL_SECS: u64 = 3;
+pub const FAULT_SAMPLE_INTERVAL_SECS: u64 = 60;
 
 pub const INFERENCE_ENABLED: bool = true;
 pub const INFERENCE_SYNTHETIC_DIAGNOSTIC: bool = false;
