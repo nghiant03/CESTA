@@ -79,6 +79,21 @@ Paths below are relative to `src/CESTA/`.
 - `local_warmup_use_task_loss: true` uses the configured focal criterion; `local_warmup_preserve_optimizer: true` retains shared Adam moments across stages. Count warmup epochs separately; selected global epoch is warmup count plus recorded joint epoch. Balanced staged recipes restart Gumbel annealing at joint epoch 1 and derive capped inverse-sqrt weights from valid overlapping training labels only.
 - `learning_rate_schedule: late_cosine` requires a start before the final epoch and positive `learning_rate_final` no greater than initial LR. Reject schedules with warmup or nonunit joint LR scale. Update existing optimizer groups before epoch updates without resetting Adam, and log actual `learning_rates`. Default `none` leaves groups untouched.
 
+## Firmware deployment
+
+- ESP-NOW worker polling and fragment pacing use `FreeRtos::delay_ms`, which rounds positive delays up to scheduler ticks. Do not use sub-tick `std::thread::sleep` loops on ESP-IDF; they can busy-wait and starve the idle task watchdog.
+- ESP-IDF SNTP completion status is read-and-clear. Read once per poll and retain the observed completion; never reread it for logging or a second wait loop.
+- Node exports use v3 raw class logits and checkpoint CRF transitions; firmware performs full-window Viterbi with previous-to-next transition orientation and first-index tie breaking. Softmax emission probabilities are not CRF marginals. Reject legacy probability-only artifacts rather than silently dropping decoding.
+- Require the two-layer bidirectional GRU and one-minute complete-window deployment contract. Missing, late, or discontinuous samples reset warmup instead of compacting time. Exchange only timestamp-matched windows with compatible checkpoint fingerprints and matching request nonces; never relabel stale sender caches.
+- Bound transport and exchange queues, validate configured peer identity/MAC bindings, and mask unregistered peers before gating. Registration is not RF reachability or cryptographic authentication. Runtime and deployment validation commands belong in `firmware/README.md`.
+
+### Benchmark telemetry
+
+- MQTT benchmark records are versioned and identified by benchmark, input stream, device, boot, and event sequence. QoS duplicates must not inflate counts; conflicting duplicate identities are invalid. Keep device and host execution cohorts separate.
+- Online metric reports contain only memory, latency, decision delay, and modeled radio energy. Accuracy belongs in offline evaluation. Labels, storage footprint, logical communication ratios, transport counters, and uptime are not online report categories.
+- Keep logical directed message counts and payload widths as internal modeled-energy inputs, not physical packet measurements. Distinguish nominal sample-slot-to-decision delay from window-ready-to-decision delay. Preserve failed-stage durations and audit metadata separately from successful-cycle latency; unfinished stages are unavailable rather than zero.
+- Modeled first-order radio energy requires explicit directed-edge distances and shared constants. Missing energy instrumentation is unavailable, never measured zero. Common IDs do not prove identical input streams, neighbor availability, or hardware conditions.
+
 ## Model contracts
 
 ### Hydra and HMCT

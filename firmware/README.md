@@ -26,14 +26,23 @@ One firmware image is built per deployed node. Edit `src/config.rs`:
 | `EXCHANGE_WAIT_MS` / `EXCHANGE_POLL_MS` | Diagnosis-cycle exchange deadline and worker poll interval |
 | `FAULT_CONFIG` | Fault profile  |
 
+### Recorded boards
+
+| Assigned device | Node index | Factory base MAC | Detected flash | Verified |
+|---|---|---|---|---|
+| `esp32_01` | 0 | `E0:72:A1:D5:5E:78` | 16 MB | `espflash board-info`, 2026-11-07, ESP32-S3 revision v0.2 |
+| `esp32_02` | 1 | `28:84:85:65:66:A0` | 16 MB | `espflash board-info`, 2026-11-07, ESP32-S3 revision v0.2 |
+| `esp32_03` | 2 | `E0:72:A1:D8:F9:9C` | 16 MB | `espflash board-info`, 2026-11-07, ESP32-S3 revision v0.2 |
+| `esp32_04` | 3 | `E0:72:A1:D6:CA:A8` | 16 MB | `espflash board-info`, 2026-11-07, ESP32-S3 revision v0.2 |
+
+
 ## Fault profiles
 
-`src/config.rs` selects one profile per fault type in `schema/fault.py`. Apply faults in `fault.rs` to the normal `DHT_PIN` reading, matching the Python injectors' per-event randomization:
+`src/config.rs` retains `FAULT_NORMAL` as the default. Set `FAULT_CONFIG = FAULT_ALL` to enable mixed fault injection.
 
-- `FAULT_NORMAL`: unmodified readings.
-- `FAULT_SPIKE`: constant offset per event with magnitude sampled from `spike_magnitude_range` °C and a random sign, over consecutive events of `event_duration_samples` samples.
-- `FAULT_DRIFT`: linear drift of `drift_rate` °C per sample with a random direction per event, over consecutive events of `event_duration_samples` samples.
-- `FAULT_STUCK`: freezes at the first reading of each event with Gaussian jitter of `jitter_std` °C.
+- SPIKE: a constant, randomly signed offset per event.
+- DRIFT: a linear offset with a randomly selected rate and direction per event.
+- STUCK: exactly the first temperature of the event, with **zero jitter**.
 
 ## Model export
 
@@ -49,19 +58,23 @@ uv run --isolated \
   --target node --receiver-index <node_index>
 ```
 
+The validated DHT seed-12 CRF0.02 exports are in `runs/firmware-export-cesta-v3-seed12-20261107T154717Z/node-0/` through `node-3/`. Receiver 0 is installed in `firmware/model/`; the previous Intel artifact is preserved under that run's `firmware-model-backup/`. Each node requires its own matched binary/metadata pair and sender order. Desktop parity does not establish on-device latency, arena headroom, or radio delivery.
+
 Export targets:
 
 - `node` (default): one graph receiver with its sender list; pass the device's graph index as `--receiver-index` and list the same senders in `NEIGHBORS` in `sender_indices` order.
-- `local`: the shared per-sensor temporal encoder and classifier without communication.
-- `graph`: centralized fixed-topology inference for a runtime that supplies every node window.
+- `local` and `graph` are rejected by the current firmware exporter: their probability-output wrappers do not satisfy the v3 distributed raw-logit/CRF contract.
 
 ### Inference and exchange contracts
 
 - Embed `model/model.tflite` and invoke Espressif TensorFlow Lite Micro through the `components/cesta_tflite` C++ bridge.
-- Parse `model.json` and reject exports whose target, receiver, sender list, shapes, or training status do not match `src/config.rs`.
-- Preserve receiver-local requests, neighbor responses, and per-timestep many-to-many diagnosis; do not replace distributed deployment with a local-only classifier. The node artifact consumes the local window and selected neighbor payloads and returns per-timestep probabilities and request decisions.
+- Require v3 metadata and raw class logits, with checkpoint CRF transitions retained for firmware Viterbi decoding. Reject legacy probability-only exports and mismatched receiver, sender order, shapes, architecture, or training status. Softmax probabilities are emission probabilities, not CRF marginals.
+- Preserve receiver-local requests, received-neighbor attention, fusion/correction, and full-window decoding. MQTT reports all decoded timestep labels as well as the final timestep's diagnosis; decoded classes need not equal independent softmax argmax.
 - Use binary request/response exchanges directly over ESP-NOW. `espnow.rs` fragments frames into 250-byte packets and reassembles them per peer; its worker serves cached hidden-state rows for requested timesteps and sends queued frames.
-- Peers use the static `NEIGHBORS` station MAC addresses, unencrypted, on the current station channel. MQTT carries telemetry only.
+- Peers use validated static `NEIGHBORS` station MAC addresses, unencrypted, on the current station channel. Unknown identities and invalid or duplicate MACs are rejected. Incoming model-neighbor configuration must be reciprocal for response routing; the DHT graph satisfies this. MAC/name binding is not cryptographic authentication. MQTT carries telemetry only.
+- Replace all zero MAC placeholders with actual station addresses before deployment. Receiver 0 uses DHT sender indices 2 and 3 (`esp32_03` and `esp32_04`). Registered-peer masks represent valid local radio registrations, not proof of RF reachability; absent responses remain masked out of attention.
+- Inference uses shared SNTP-aligned one-minute slots and complete 60-sample windows. Failed reads, missed slots, or reads over two seconds late invalidate the window rather than compressing time. Sampling waits for synchronization; blocking inference overruns trigger fresh warmup. This conservative policy skips incomplete windows instead of reproducing offline masked-window inference.
+- Exchange identities include actual window timestamps, shared checkpoint SHA256, and request nonces. Never substitute a stale cached window for a requested one or combine hidden states from different checkpoints. Early requests wait for matching cache readiness within a bounded deadline; replies are admitted only for the active request cycle. Queues and reassembly are bounded; send completion and pacing do not guarantee successful radio delivery. Failed frames are abandoned, with new requests possible in subsequent inference cycles.
 - Threshold requests at the model's `request_threshold` (evaluation semantics), wait up to `EXCHANGE_WAIT_MS`, then rerun inference with received payloads.
 - Preserve watchdog servicing during long float32 passes: the bridge yields at operator boundaries and temporarily lowers the caller to idle priority during tensor allocation, then restores it.
 - In `main.rs`, construct SNTP from `NTP_SERVER`, not `EspSntp::new_default()`.
@@ -75,6 +88,8 @@ touch sdkconfig.defaults
 cargo build --release
 espflash flash target/xtensa-esp32s3-espidf/release/cesta-firmware --monitor
 ```
+
+`partitions.csv` reserves a 6 MiB factory application partition at `0x10000` for the embedded model on 8 MB flash; this layout does not provide OTA slots. Existing generated sdkconfig files can retain old 2 MB flash or small application partitions despite changes to defaults. Build with a fresh generated sdkconfig, then verify the resolved flash size, custom partition selection, PSRAM settings, and offline image fit before flashing. Preserve existing device data when changing partition layouts.
 
 After C++ component edits, touch `sdkconfig.defaults` before rebuilding so `esp-idf-sys` reruns CMake; a Rust-only rebuild can retain a stale bridge library.
 
@@ -124,6 +139,21 @@ Normal builds run the sensor/radio application. Enable synthetic diagnosis only 
 Synthetic mode logs a 15-second startup countdown, runs its cases once, and repeats the final PASS/FAIL every five seconds for serial reconnection. It does not start the normal sensor or radio loop.
 
 Use UART0 at 115200 baud as the primary console and native USB Serial/JTAG as secondary. Prefer the USB-UART bridge for startup and panic capture: ESP32 resets can disconnect native USB and its USB/IP forwarding.
+
+## Spatial-model measurement protocol
+
+Compare CESTA, ST-GCN, DCRNN, and HiFiNet on identical input/label streams, sampling, window policy, and neighbor availability. The paper places HMCT among node-local temporal baselines. This firmware executes CESTA only; a common MQTT record format does not provide baseline inference implementations. Device and server-side execution results must remain separate.
+
+| Metric | Measurement and interpretation |
+|---|---|
+| Memory | Internal/PSRAM free and minimum-free heap, largest free blocks, configured tensor arena; snapshots are not exact per-model peak allocation |
+| Latency | Request inference, exchange processing, aggregate inference, and full cycle; mean, median, p95, p99, and maximum |
+| Decision delay | Latest nominal sample-slot to decision and window-ready to decision; wall-clock measurements require synchronization |
+| Modeled radio energy | Explicit distances and common first-order radio constants applied to logical payload counts; not measured ESP32 or battery energy |
+
+`cycle_us` includes peer setup, both prediction passes (including decoding), and exchange processing. It excludes acquisition, window insertion, telemetry serialization, and MQTT publication. `exchange_wait_us` includes request construction, queueing, polling, and response processing, not just radio-active time. Failed attempts retain completed/partial stage timings separately; unfinished stages are null.
+
+Online reports are restricted to these four metric families; accuracy remains an offline benchmark. Logical edge counts and payload width are retained only as energy-calculation inputs, not as a separate reported communication metric. Deduplicate MQTT QoS retransmissions by boot/device/event identity. Keep run and stream identities explicit; independently randomized live fault injection is not an identical replay across models. Retain failure/audit information to avoid presenting only successful-cycle performance. Actual energy requires an external power measurement synchronized to the run; unavailable measurements must not be reported as zero.
 
 ## Telemetry
 
