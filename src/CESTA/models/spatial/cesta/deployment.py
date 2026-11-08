@@ -94,8 +94,7 @@ class CESTANodeDeploymentModel(nn.Module):
                 boundary_gate = 1.0 + torch.sigmoid(model.boundary_head(hidden).squeeze(-1)).unsqueeze(-1)
                 correction_delta = boundary_gate * correction_delta
             logits = logits + torch.sigmoid(model.correction_logit) * correction_delta
-        probabilities = F.softmax(logits, dim=-1)
-        return torch.cat([probabilities, local_hidden, request_mask], dim=-1)
+        return torch.cat([logits, local_hidden, request_mask], dim=-1)
 
     def _request_mask(self, local_hidden: torch.Tensor, possible_mask: torch.Tensor) -> torch.Tensor:
         model = self.model

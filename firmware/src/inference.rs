@@ -38,6 +38,10 @@ pub struct NodeClassifier {
     output_width: usize,
     request_threshold: f32,
     communication_mode: String,
+    crf_transitions: Option<[[f32; CLASS_COUNT]; CLASS_COUNT]>,
+    sample_interval_secs: u64,
+    model_fingerprint: String,
+    possible: Vec<bool>,
     samples: Vec<f32>,
     sample_count: usize,
     input: Vec<f32>,
@@ -58,6 +62,9 @@ impl NodeClassifier {
             output_width,
             request_threshold,
             communication_mode,
+            crf_transitions,
+            sample_interval_secs,
+            model_fingerprint,
         ) = parse_metadata(receiver_index, sender_indices)?;
         let inner = unsafe {
             cesta_tflite_create(MODEL_DATA.as_ptr(), MODEL_DATA.len(), tensor_arena_size)
@@ -82,6 +89,10 @@ impl NodeClassifier {
             output_width,
             request_threshold,
             communication_mode,
+            crf_transitions,
+            sample_interval_secs,
+            model_fingerprint,
+            possible: vec![true; neighbor_count],
             samples: vec![0.0; WINDOW_SIZE * features_per_node],
             sample_count: 0,
             input: vec![0.0; WINDOW_SIZE * input_width],
@@ -113,7 +124,37 @@ impl NodeClassifier {
         &self.communication_mode
     }
 
+    pub fn sample_interval_secs(&self) -> u64 {
+        self.sample_interval_secs
+    }
+
+    pub fn model_fingerprint(&self) -> &str {
+        &self.model_fingerprint
+    }
+
+    pub fn reset_window(&mut self) {
+        self.sample_count = 0;
+        self.samples.fill(0.0);
+    }
+
+    pub fn set_neighbor_available(
+        &mut self,
+        neighbor: usize,
+        available: bool,
+    ) -> Result<(), String> {
+        let slot = self
+            .possible
+            .get_mut(neighbor)
+            .ok_or_else(|| "neighbor index is out of range".to_owned())?;
+        *slot = available;
+        Ok(())
+    }
+
     pub fn push_temperature(&mut self, temperature: f32) -> bool {
+        if !temperature.is_finite() {
+            self.reset_window();
+            return false;
+        }
         let features = self.features_per_node;
         if self.sample_count < WINDOW_SIZE {
             self.samples[self.sample_count * features] = temperature;
@@ -144,6 +185,25 @@ impl NodeClassifier {
 
     pub fn predict(&mut self, slots: Option<&NeighborSlots>) -> Result<NodePass, String> {
         let started = Instant::now();
+        if self.sample_count != WINDOW_SIZE {
+            return Err("inference requires a complete contiguous window".to_owned());
+        }
+        if let Some(slots) = slots {
+            if slots.window_size != WINDOW_SIZE
+                || slots.neighbor_count != self.neighbor_count
+                || slots.hidden_size != self.hidden_size
+                || slots.features_per_node != self.features_per_node
+                || slots.payload.len()
+                    != WINDOW_SIZE
+                        * self.neighbor_count
+                        * (self.hidden_size + self.features_per_node)
+                || slots.received.len() != WINDOW_SIZE * self.neighbor_count
+                || slots.payload.iter().any(|v| !v.is_finite())
+                || slots.received.iter().any(|v| *v != 0.0 && *v != 1.0)
+            {
+                return Err("invalid neighbor slots".to_owned());
+            }
+        }
         self.build_input(slots);
         let status = unsafe {
             cesta_tflite_predict(
@@ -165,7 +225,12 @@ impl NodeClassifier {
             });
         }
 
+        if self.output.iter().any(|value| !value.is_finite()) {
+            return Err("model returned nonfinite output".to_owned());
+        }
         let mut pass = NodePass {
+            logits: vec![0.0; WINDOW_SIZE * CLASS_COUNT],
+            decoded: Vec::new(),
             probabilities: vec![0.0; WINDOW_SIZE * CLASS_COUNT],
             hidden: vec![0.0; WINDOW_SIZE * self.hidden_size],
             request: vec![0.0; WINDOW_SIZE * self.neighbor_count],
@@ -174,8 +239,10 @@ impl NodeClassifier {
         for timestep in 0..WINDOW_SIZE {
             let row = timestep * self.output_width;
             let classes = timestep * CLASS_COUNT;
-            pass.probabilities[classes..classes + CLASS_COUNT]
+            pass.logits[classes..classes + CLASS_COUNT]
                 .copy_from_slice(&self.output[row..row + CLASS_COUNT]);
+            let probabilities = softmax(&self.output[row..row + CLASS_COUNT]);
+            pass.probabilities[classes..classes + CLASS_COUNT].copy_from_slice(&probabilities);
             let hidden = timestep * self.hidden_size;
             pass.hidden[hidden..hidden + self.hidden_size].copy_from_slice(
                 &self.output[row + CLASS_COUNT..row + CLASS_COUNT + self.hidden_size],
@@ -185,6 +252,8 @@ impl NodeClassifier {
                 &self.output[row + CLASS_COUNT + self.hidden_size..row + self.output_width],
             );
         }
+        pass.decoded = decode_sequence(&pass.logits, self.crf_transitions.as_ref())?;
+        pass.elapsed_ms = started.elapsed().as_millis();
         Ok(pass)
     }
 
@@ -193,7 +262,9 @@ impl NodeClassifier {
             .map(|neighbor| {
                 (0..WINDOW_SIZE)
                     .filter(|timestep| {
-                        request[timestep * self.neighbor_count + neighbor] >= self.request_threshold
+                        self.possible[neighbor]
+                            && request[timestep * self.neighbor_count + neighbor]
+                                >= self.request_threshold
                     })
                     .map(|timestep| timestep as u16)
                     .collect()
@@ -204,12 +275,7 @@ impl NodeClassifier {
     pub fn diagnosis(&self, pass: &NodePass) -> Diagnosis {
         let offset = (WINDOW_SIZE - 1) * CLASS_COUNT;
         let probabilities = pass.probabilities[offset..offset + CLASS_COUNT].to_vec();
-        let mut class = 0;
-        for index in 1..CLASS_COUNT {
-            if probabilities[index] > probabilities[class] {
-                class = index;
-            }
-        }
+        let class = pass.decoded[WINDOW_SIZE - 1];
         Diagnosis {
             class,
             label: CLASS_NAMES[class],
@@ -243,12 +309,15 @@ impl NodeClassifier {
                 }
             }
             for neighbor in 0..neighbors {
-                self.input[cursor + neighbor] = 1.0;
+                self.input[cursor + neighbor] = if self.possible[neighbor] { 1.0 } else { 0.0 };
             }
             cursor += neighbors;
             for neighbor in 0..neighbors {
                 self.input[cursor + neighbor] = match slots {
-                    Some(slots) => slots.received[timestep * neighbors + neighbor],
+                    Some(slots) if self.possible[neighbor] => {
+                        slots.received[timestep * neighbors + neighbor]
+                    }
+                    Some(_) => 0.0,
                     None => 0.0,
                 };
             }
@@ -263,6 +332,8 @@ impl Drop for NodeClassifier {
 }
 
 pub struct NodePass {
+    pub logits: Vec<f32>,
+    pub decoded: Vec<usize>,
     pub probabilities: Vec<f32>,
     pub hidden: Vec<f32>,
     pub request: Vec<f32>,
@@ -314,6 +385,10 @@ impl NeighborSlots {
             || neighbor >= self.neighbor_count
             || hidden.len() != self.hidden_size
             || features.len() != self.features_per_node
+            || hidden
+                .iter()
+                .chain(features)
+                .any(|value| !value.is_finite())
         {
             return false;
         }
@@ -347,11 +422,55 @@ type Metadata = (
     usize,  // output_width
     f32,    // request_threshold
     String, // communication_mode
+    Option<[[f32; CLASS_COUNT]; CLASS_COUNT]>,
+    u64,
+    String,
 );
 
 fn parse_metadata(receiver_index: usize, sender_indices: &[usize]) -> Result<Metadata, String> {
     let metadata: serde_json::Value = serde_json::from_str(MODEL_METADATA)
         .map_err(|error| format!("invalid model metadata: {}", error))?;
+    if json_str(&metadata, "format")? != "cesta-tflite-micro-v3" {
+        return Err(
+            "firmware requires a v3 raw-logit export, legacy exports are unsupported".to_owned(),
+        );
+    }
+    if metadata.get("output_layout")
+        != Some(&serde_json::json!([
+            "class_logits",
+            "local_hidden",
+            "request_mask"
+        ]))
+    {
+        return Err(
+            "model output_layout must contain raw class_logits, local_hidden, request_mask"
+                .to_owned(),
+        );
+    }
+    if json_str(&metadata, "temporal_backend")? != "gru" {
+        return Err("firmware supports only the GRU temporal backend".to_owned());
+    }
+    let bidirectional = json_bool(&metadata, "gru_bidirectional")?;
+    if !bidirectional || json_u64(&metadata, "gru_num_layers")? != 2 {
+        return Err("firmware requires a two-layer bidirectional GRU".to_owned());
+    }
+    json_bool(&metadata, "standardize_window_features")?;
+    let sample_interval_secs = json_u64(&metadata, "sample_interval_secs")?;
+    if sample_interval_secs != 60 {
+        return Err("firmware requires a 60-second sample interval".to_owned());
+    }
+    let model_fingerprint = json_str(&metadata, "source_checkpoint_sha256")?;
+    if model_fingerprint.len() != 64
+        || !model_fingerprint
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit())
+    {
+        return Err(
+            "source_checkpoint_sha256 must contain exactly 64 hexadecimal digits".to_owned(),
+        );
+    }
+    let model_fingerprint = model_fingerprint.to_ascii_lowercase();
+    let crf_transitions = parse_transitions(&metadata)?;
     if metadata
         .get("trained_checkpoint")
         .and_then(serde_json::Value::as_bool)
@@ -391,6 +510,9 @@ fn parse_metadata(receiver_index: usize, sender_indices: &[usize]) -> Result<Met
         return Err("model neighbor_count does not match sender_indices".to_owned());
     }
     let hidden_size = json_u64(&metadata, "hidden_size")? as usize;
+    if hidden_size == 0 || (bidirectional && hidden_size % 2 != 0) || neighbor_count == 0 {
+        return Err("invalid hidden width or neighbor count".to_owned());
+    }
     let input_width =
         features_per_node + neighbor_count * (hidden_size + features_per_node) + 2 * neighbor_count;
     let output_width = CLASS_COUNT + hidden_size + neighbor_count;
@@ -418,6 +540,9 @@ fn parse_metadata(receiver_index: usize, sender_indices: &[usize]) -> Result<Met
         output_width,
         request_threshold,
         communication_mode,
+        crf_transitions,
+        sample_interval_secs,
+        model_fingerprint,
     ))
 }
 
@@ -455,4 +580,110 @@ fn json_u64_slice(metadata: &serde_json::Value, key: &str) -> Result<Vec<u64>, S
                 .ok_or_else(|| format!("model metadata array '{}' must contain integers", key))
         })
         .collect()
+}
+
+fn json_bool(metadata: &serde_json::Value, key: &str) -> Result<bool, String> {
+    metadata
+        .get(key)
+        .and_then(serde_json::Value::as_bool)
+        .ok_or_else(|| format!("model metadata is missing boolean field '{}'", key))
+}
+
+fn parse_transitions(
+    metadata: &serde_json::Value,
+) -> Result<Option<[[f32; CLASS_COUNT]; CLASS_COUNT]>, String> {
+    let enabled = json_bool(metadata, "use_crf")?;
+    let value = metadata
+        .get("crf_transitions")
+        .ok_or_else(|| "missing crf_transitions".to_owned())?;
+    if !enabled {
+        if !value.is_null() {
+            return Err("disabled CRF requires null crf_transitions".to_owned());
+        }
+        return Ok(None);
+    }
+    let rows = value
+        .as_array()
+        .filter(|rows| rows.len() == CLASS_COUNT)
+        .ok_or_else(|| "crf_transitions must be a 4x4 matrix".to_owned())?;
+    let mut transitions = [[0.0; CLASS_COUNT]; CLASS_COUNT];
+    for (previous, row) in rows.iter().enumerate() {
+        let row = row
+            .as_array()
+            .filter(|row| row.len() == CLASS_COUNT)
+            .ok_or_else(|| "crf_transitions must be a 4x4 matrix".to_owned())?;
+        for (next, value) in row.iter().enumerate() {
+            let value = value
+                .as_f64()
+                .ok_or_else(|| "CRF scores must be numbers".to_owned())?
+                as f32;
+            if !value.is_finite() {
+                return Err("CRF scores must be finite float32 values".to_owned());
+            }
+            transitions[previous][next] = value;
+        }
+    }
+    Ok(Some(transitions))
+}
+
+fn argmax(values: &[f32]) -> usize {
+    let mut best = 0;
+    for index in 1..values.len() {
+        if values[index] > values[best] {
+            best = index;
+        }
+    }
+    best
+}
+
+fn softmax(logits: &[f32]) -> [f32; CLASS_COUNT] {
+    let maximum = logits[argmax(logits)];
+    let mut probabilities = [0.0; CLASS_COUNT];
+    for index in 0..CLASS_COUNT {
+        probabilities[index] = (logits[index] - maximum).exp();
+    }
+    let sum: f32 = probabilities.iter().sum();
+    for value in &mut probabilities {
+        *value /= sum;
+    }
+    probabilities
+}
+
+fn decode_sequence(
+    logits: &[f32],
+    transitions: Option<&[[f32; CLASS_COUNT]; CLASS_COUNT]>,
+) -> Result<Vec<usize>, String> {
+    if logits.is_empty() || logits.len() % CLASS_COUNT != 0 || logits.iter().any(|v| !v.is_finite())
+    {
+        return Err("invalid sequence emissions".to_owned());
+    }
+    let Some(transitions) = transitions else {
+        return Ok(logits.chunks_exact(CLASS_COUNT).map(argmax).collect());
+    };
+    let length = logits.len() / CLASS_COUNT;
+    let mut score = [0.0; CLASS_COUNT];
+    score.copy_from_slice(&logits[..CLASS_COUNT]);
+    let mut backpointers = vec![[0; CLASS_COUNT]; length];
+    for timestep in 1..length {
+        let mut next_score = [0.0; CLASS_COUNT];
+        for next in 0..CLASS_COUNT {
+            let mut candidates = [0.0; CLASS_COUNT];
+            for previous in 0..CLASS_COUNT {
+                candidates[previous] = score[previous] + transitions[previous][next];
+            }
+            let best = argmax(&candidates);
+            backpointers[timestep][next] = best;
+            next_score[next] = candidates[best] + logits[timestep * CLASS_COUNT + next];
+        }
+        if next_score.iter().any(|v| !v.is_finite()) {
+            return Err("CRF score overflow".to_owned());
+        }
+        score = next_score;
+    }
+    let mut decoded = vec![0; length];
+    decoded[length - 1] = argmax(&score);
+    for timestep in (1..length).rev() {
+        decoded[timestep - 1] = backpointers[timestep][decoded[timestep]];
+    }
+    Ok(decoded)
 }

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import inspect
 import json
 import shutil
@@ -73,8 +74,11 @@ def main() -> int:
     args = parse_args()
     model = load_cesta_checkpoint(args.model)
     validate_model(model, args.target)
+    sample_interval_secs = validate_checkpoint_recipe(args.model)
 
     model.eval()
+    if not torch.isfinite(model.crf_transitions).all():
+        raise ValueError("nonfinite CRF transitions")
     node_metadata: dict[str, object] = {}
     if args.target == "node":
         if args.receiver_index is None:
@@ -89,7 +93,7 @@ def main() -> int:
             "neighbor_count": deployment_model.neighbor_count,
             "hidden_size": deployment_model.hidden_size,
             "input_layout": ["local_features", "neighbor_hidden_and_features", "possible_mask", "received_mask"],
-            "output_layout": ["class_probabilities", "local_hidden", "request_mask"],
+            "output_layout": ["class_logits", "local_hidden", "request_mask"],
         }
     elif args.target == "local":
         deployment_model = CESTALocalDeploymentModel(model).eval()
@@ -128,6 +132,29 @@ def main() -> int:
                 mask_start = case.shape[-1] - neighbors
                 case[..., mask_start : mask_start + received] = 1.0
             examples.append(case)
+    if args.target == "node":
+        generator = torch.Generator().manual_seed(1202)
+        for case_index in range(3):
+            features = 22.0 + torch.randn(1, WINDOW_SIZE, model.num_nodes, 1, generator=generator) * (0.1 + case_index)
+            with torch.no_grad():
+                full_logits = model(features)
+                local = features.permute(0, 2, 1, 3).reshape(model.num_nodes, WINDOW_SIZE, 1)
+                encoded, _ = model.temporal_encoder(model.prepare_temporal_input(local))
+                encoded = encoded.reshape(1, model.num_nodes, WINDOW_SIZE, -1).permute(0, 2, 1, 3)
+                senders = deployment_model.sender_indices
+                payload = torch.cat([encoded[:, :, senders], features[:, :, senders]], dim=-1).flatten(2)
+                mask = torch.ones(1, WINDOW_SIZE, deployment_model.neighbor_count)
+                node_input = torch.cat([features[:, :, args.receiver_index], payload, mask, mask * 0], dim=-1)
+                requests = deployment_model(node_input)[..., -deployment_model.neighbor_count:]
+                node_input[..., -deployment_model.neighbor_count:] = (requests >= model.request_threshold).float()
+                node_logits = deployment_model(node_input)[..., :model.num_classes]
+                original_logits = full_logits[:, :, args.receiver_index]
+                torch.testing.assert_close(node_logits, original_logits, rtol=1e-4, atol=1e-5)
+                if model.use_crf:
+                    torch.testing.assert_close(decode_emissions(node_logits, model.crf_transitions),
+                                               model.crf_decode(full_logits)[:, :, args.receiver_index], rtol=0, atol=0)
+                print(f"Original graph parity case {case_index}: max error {(node_logits - original_logits).abs().max().item()}")
+                examples.append(node_input)
     for validation_input in examples:
         with torch.no_grad():
             reference = deployment_model(validation_input).cpu()
@@ -136,6 +163,7 @@ def main() -> int:
             original_content=original_content,
             neighbor_count=deployment_model.neighbor_count if args.target == "node" else 0,
             request_threshold=model.request_threshold,
+            transitions=model.crf_transitions.detach().cpu() if model.use_crf else None,
         )
     print(f"Numerical parity passed for {len(examples)} input cases; split {split_concatenations} oversized concatenations")
 
@@ -145,7 +173,16 @@ def main() -> int:
     metadata_path = output / "model.json"
     model_path.write_bytes(model_content)
     metadata = {
-        "format": "cesta-tflite-micro-v2",
+        "format": "cesta-tflite-micro-v3",
+        "source_checkpoint_sha256": hashlib.sha256((args.model / "weight.pt").read_bytes()).hexdigest(),
+        "source_config_sha256": hashlib.sha256((args.model / "config.json").read_bytes()).hexdigest(),
+        "temporal_backend": model.temporal_backend,
+        "gru_bidirectional": model.bidirectional,
+        "gru_num_layers": model.num_layers,
+        "standardize_window_features": model.standardize_window_features,
+        "sample_interval_secs": sample_interval_secs,
+        "use_crf": model.use_crf,
+        "crf_transitions": model.crf_transitions.detach().cpu().tolist() if model.use_crf else None,
         "source_checkpoint": None if args.validation_artifact else str(args.model),
         "trained_checkpoint": not args.validation_artifact,
         "target": args.target,
@@ -193,7 +230,27 @@ def load_cesta_checkpoint(path: Path) -> CESTAClassifier:
     return load_checkpoint_weights(model, path, map_location="cpu")
 
 
+def validate_checkpoint_recipe(path: Path) -> int:
+    metadata = load_checkpoint_metadata(path)
+    manifest = json.loads((path / "manifest.json").read_text())
+    for source in (metadata, manifest):
+        window = source.get("train_config", {}).get("data", {}).get("window", {}).get("window_size")
+        if window != WINDOW_SIZE:
+            raise ValueError(f"checkpoint configuration and manifest must explicitly declare window_size={WINDOW_SIZE}")
+    frequency = manifest.get("injection_config", {}).get("resample_freq")
+    if frequency not in {"1min", "60s", "60sec"}:
+        raise ValueError(f"node firmware requires a verified 60-second resample recipe, got {frequency!r}")
+    return 60
+
+
 def validate_model(model: CESTAClassifier, target: str) -> None:
+    if target != "node":
+        raise ValueError("v3 export supports only node targets; local/graph wrappers do not implement the raw-logit CRF contract")
+    if not model.bidirectional or model.num_layers != 2:
+        raise ValueError("node firmware requires a two-layer bidirectional GRU")
+    response_bytes = 5 + 1 + 1 + 32 + 24 + 2 + 40 + WINDOW_SIZE * (2 + 4 * (model.encoder_output_size + model.features_per_node))
+    if response_bytes > 62220:
+        raise ValueError(f"full-window response needs {response_bytes} bytes, exceeding the 62220-byte exchange limit")
     if model.temporal_backend != "gru":
         raise ValueError("firmware export currently supports only the GRU temporal backend")
     if model.features_per_node != 1:
@@ -291,6 +348,21 @@ def inspect_model(model_content: bytes) -> tuple[set[str], list[int], list[int]]
     return operators, input_tensor.ShapeAsNumpy().tolist(), output_tensor.ShapeAsNumpy().tolist()
 
 
+def decode_emissions(emissions: torch.Tensor, transitions: torch.Tensor) -> torch.Tensor:
+    score = emissions[:, 0]
+    paths = []
+    for step in range(1, emissions.shape[1]):
+        score, previous = (score.unsqueeze(-1) + transitions).max(dim=1)
+        score = score + emissions[:, step]
+        paths.append(previous)
+    state = score.argmax(-1)
+    result = [state]
+    for previous in reversed(paths):
+        state = previous.gather(1, state.unsqueeze(-1)).squeeze(-1)
+        result.append(state)
+    return torch.stack(list(reversed(result)), dim=1)
+
+
 def verify_numerical_parity(
     model_content: bytes,
     example: torch.Tensor,
@@ -299,6 +371,7 @@ def verify_numerical_parity(
     original_content: bytes,
     neighbor_count: int,
     request_threshold: float,
+    transitions: torch.Tensor | None = None,
 ) -> None:
     import numpy as np
     from ai_edge_litert.interpreter import Interpreter
@@ -312,11 +385,13 @@ def verify_numerical_parity(
     actual = interpreter.get_tensor(output_details["index"])
     expected = reference.numpy()
     if neighbor_count:
-        # Unrolled float32 GRU hidden states accumulate ~2e-4 differences from
-        # PyTorch at Celsius-scale inputs, already present before rewriting.
-        # Keep tighter checks on the probabilities that drive node decisions.
         np.testing.assert_allclose(actual, expected, rtol=1e-4, atol=3e-4)
-        np.testing.assert_allclose(actual[..., :4], expected[..., :4], rtol=1e-4, atol=1e-5)
+        np.testing.assert_allclose(actual[..., :4], expected[..., :4], rtol=1e-4, atol=3e-4)
+        np.testing.assert_allclose(torch.from_numpy(actual[..., :4]).softmax(-1).numpy(),
+                                   torch.from_numpy(expected[..., :4]).softmax(-1).numpy(), rtol=1e-4, atol=1e-5)
+        if transitions is not None:
+            np.testing.assert_array_equal(decode_emissions(torch.from_numpy(actual[..., :4]), transitions),
+                                          decode_emissions(torch.from_numpy(expected[..., :4]), transitions))
         np.testing.assert_allclose(actual[..., -neighbor_count:], expected[..., -neighbor_count:], rtol=1e-4, atol=1e-5)
         np.testing.assert_array_equal(actual[..., :4].argmax(-1), expected[..., :4].argmax(-1))
         np.testing.assert_array_equal(actual[..., -neighbor_count:] >= request_threshold, expected[..., -neighbor_count:] >= request_threshold)
