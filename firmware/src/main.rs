@@ -8,6 +8,7 @@ mod exchange;
 mod fault;
 mod inference;
 mod mqtt;
+mod telemetry;
 mod wifi;
 
 use std::collections::VecDeque;
@@ -98,6 +99,16 @@ fn main() {
     }
     let espnow = espnow::start();
     let publisher = mqtt::start();
+    let mut telemetry = telemetry::Telemetry::new();
+    telemetry.status(
+        &publisher,
+        classifier.as_ref(),
+        timestamp_epoch(),
+        "startup",
+    );
+    if classifier.is_none() {
+        telemetry.status(&publisher, None, timestamp_epoch(), "inference_unavailable");
+    }
 
     let topic = format!("{}{}", config::MQTT_TOPIC_PREFIX, config::DEVICE_ID);
 
@@ -119,8 +130,16 @@ fn main() {
     );
     loop {
         let sample_timestamp = wait_for_slot(&mut next_slot, cadence);
+        telemetry.samples_observed += 1;
         if previous_slot.is_some_and(|previous| sample_timestamp != previous + cadence) {
             log::warn!("[INFERENCE] skipped sample slot; dropping incomplete window");
+            telemetry.sample_resets += 1;
+            telemetry.status(
+                &publisher,
+                classifier.as_ref(),
+                sample_timestamp,
+                "sample_slot_missed",
+            );
             reset_window(&mut classifier, &mut emitted_labels);
         }
         previous_slot = Some(sample_timestamp);
@@ -139,6 +158,13 @@ fn main() {
                     && read_finished < sample_timestamp + cadence
                     && sample_started.elapsed() < sample_interval;
                 if !sample_valid {
+                    telemetry.sample_resets += 1;
+                    telemetry.status(
+                        &publisher,
+                        classifier.as_ref(),
+                        sample_timestamp,
+                        "sample_late",
+                    );
                     reset_window(&mut classifier, &mut emitted_labels);
                 } else if let Some(classifier) = classifier.as_mut() {
                     if emitted_labels.len() == classifier.window_size() {
@@ -154,8 +180,18 @@ fn main() {
                             &topic,
                             sample_timestamp,
                             &emitted_labels,
+                            &mut telemetry,
+                        );
+                    } else {
+                        telemetry.status(
+                            &publisher,
+                            Some(classifier),
+                            sample_timestamp,
+                            "window_warmup",
                         );
                     }
+                } else {
+                    telemetry.status(&publisher, None, sample_timestamp, "inference_unavailable");
                 }
                 let payload = serde_json::json!({
                     "device_id": config::DEVICE_ID,
@@ -197,6 +233,13 @@ fn main() {
                 }
             }
             Err(e) => {
+                telemetry.sample_resets += 1;
+                telemetry.status(
+                    &publisher,
+                    classifier.as_ref(),
+                    sample_timestamp,
+                    "sample_read_failed",
+                );
                 reset_window(&mut classifier, &mut emitted_labels);
                 log::warn!(
                     "[DHT] path=normal gpio={} read failed: {:?}, skipping",
@@ -280,24 +323,79 @@ fn run_diagnosis_cycle(
     topic: &str,
     window_id: u64,
     emitted_labels: &VecDeque<&str>,
+    telemetry: &mut telemetry::Telemetry,
 ) {
+    let window_ready_epoch_us = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_micros() as u64;
+    let cycle_started = Instant::now();
+    telemetry.cycles_attempted += 1;
     let available = espnow::registered_peer_mask();
     for (neighbor, available) in available.iter().enumerate() {
         if let Err(error) = classifier.set_neighbor_available(neighbor, *available) {
             log::error!("[INFERENCE] peer availability invalid: {}", error);
+            telemetry.emit(
+                publisher,
+                serde_json::json!({
+                    "type": "benchmark_status",
+                    "timestamp": window_id,
+                    "checkpoint_sha256": classifier.model_fingerprint(),
+                    "reason": "peer_availability_invalid",
+                    "failed_stage": "peer_availability",
+                    "timing": {
+                        "cycle_us": cycle_started.elapsed().as_micros() as u64,
+                        "request_inference_us": Option::<u64>::None,
+                        "exchange_wait_us": Option::<u64>::None,
+                        "aggregate_inference_us": Option::<u64>::None,
+                    },
+                }),
+            );
             return;
         }
     }
+    let request_started = Instant::now();
     let request_pass =
         match classifier.predict(None) {
             Ok(pass) => pass,
             Err(error) => {
                 log::error!("[INFERENCE] request pass failed: {}", error);
+                telemetry.emit(publisher, serde_json::json!({
+                "type": "benchmark_status",
+                "timestamp": window_id,
+                "checkpoint_sha256": classifier.model_fingerprint(),
+                "reason": "request_inference_failed",
+                "failed_stage": "request_inference",
+                "timing": {
+                    "cycle_us": cycle_started.elapsed().as_micros() as u64,
+                    "request_inference_us": Some(request_started.elapsed().as_micros() as u64),
+                    "exchange_wait_us": Option::<u64>::None,
+                    "aggregate_inference_us": Option::<u64>::None,
+                },
+            }));
                 return;
             }
         };
+    let request_inference_us = request_started.elapsed().as_micros() as u64;
+    let exchange_started = Instant::now();
     if !exchange::update_cache(window_id, &request_pass.hidden, classifier.features()) {
         log::error!("[EXCHANGE] refusing invalid window cache");
+        telemetry.emit(
+            publisher,
+            serde_json::json!({
+                "type": "benchmark_status",
+                "timestamp": window_id,
+                "checkpoint_sha256": classifier.model_fingerprint(),
+                "reason": "window_cache_invalid",
+                "failed_stage": "exchange",
+                "timing": {
+                    "cycle_us": cycle_started.elapsed().as_micros() as u64,
+                    "request_inference_us": Some(request_inference_us),
+                    "exchange_wait_us": Some(exchange_started.elapsed().as_micros() as u64),
+                    "aggregate_inference_us": Option::<u64>::None,
+                },
+            }),
+        );
         return;
     }
     let requested = classifier.threshold_requests(&request_pass.request);
@@ -365,13 +463,68 @@ fn run_diagnosis_cycle(
     }
 
     exchange::end_response_cycle();
+    let exchange_wait_us = exchange_started.elapsed().as_micros() as u64;
+    let aggregate_started = Instant::now();
     let aggregate_pass = match classifier.predict(Some(&slots)) {
         Ok(pass) => pass,
         Err(error) => {
             log::error!("[INFERENCE] aggregate pass failed: {}", error);
+            telemetry.emit(publisher, serde_json::json!({
+                "type": "benchmark_status",
+                "timestamp": window_id,
+                "checkpoint_sha256": classifier.model_fingerprint(),
+                "reason": "aggregate_inference_failed",
+                "failed_stage": "aggregate_inference",
+                "timing": {
+                    "cycle_us": cycle_started.elapsed().as_micros() as u64,
+                    "request_inference_us": Some(request_inference_us),
+                    "exchange_wait_us": Some(exchange_wait_us),
+                    "aggregate_inference_us": Some(aggregate_started.elapsed().as_micros() as u64),
+                },
+            }));
             return;
         }
     };
+    let aggregate_inference_us = aggregate_started.elapsed().as_micros() as u64;
+    let cycle_us = cycle_started.elapsed().as_micros() as u64;
+    let decision_ready_epoch_us = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_micros() as u64;
+    telemetry.cycles_completed += 1;
+    let payload_bytes_per_message =
+        (classifier.hidden_size() + classifier.features_per_node()) * std::mem::size_of::<f32>();
+    let edges: Vec<serde_json::Value> = config::NEIGHBORS.iter().enumerate().map(|(neighbor, peer)| {
+        serde_json::json!({
+            "sender_node_index": peer.node_index,
+            "possible_messages": if available[neighbor] { classifier.window_size() } else { 0 },
+            "requested_messages": requested[neighbor].len(),
+            "received_messages": (0..classifier.window_size()).filter(|timestep| slots.is_received(*timestep, neighbor)).count(),
+        })
+    }).collect();
+    telemetry.emit(publisher, serde_json::json!({
+        "type": "benchmark",
+        "decision_ready_epoch_us": decision_ready_epoch_us,
+        "window_ready_epoch_us": window_ready_epoch_us,
+        "window_size": classifier.window_size(),
+        "checkpoint_sha256": classifier.model_fingerprint(),
+        "window_start_timestamp": window_id - (classifier.window_size() as u64 - 1) * classifier.sample_interval_secs(),
+        "window_end_timestamp": window_id,
+        "sample_interval_seconds": classifier.sample_interval_secs(),
+        "prediction_policy": "window_all",
+        "timing": {
+            "request_inference_us": request_inference_us,
+            "exchange_wait_us": exchange_wait_us,
+            "aggregate_inference_us": aggregate_inference_us,
+            "cycle_us": cycle_us,
+        },
+        "memory": telemetry::memory(),
+        "communication": {
+            "purpose": "radio_energy_model_inputs",
+            "edges": edges,
+            "payload_bytes_per_message": payload_bytes_per_message,
+        },
+    }));
     let diagnosis = classifier.diagnosis(&aggregate_pass);
     let decoded_labels: Vec<&str> = aggregate_pass
         .decoded

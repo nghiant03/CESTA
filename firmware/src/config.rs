@@ -14,6 +14,8 @@ pub const MQTT_PASSWORD: &str = "";
 
 pub const DEVICE_ID: &str = "esp32_04";
 pub const MQTT_TOPIC_PREFIX: &str = "cesta/readings/";
+pub const BENCHMARK_ID: &str = "unassigned";
+pub const BENCHMARK_STREAM_ID: &str = "unassigned";
 pub const MQTT_QUEUE_CAPACITY: usize = 16;
 
 pub const NODE_INDEX: usize = 3;
