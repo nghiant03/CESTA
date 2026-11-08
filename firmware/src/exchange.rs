@@ -2,6 +2,7 @@
 
 use std::collections::VecDeque;
 use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 use log::{debug, info, warn};
 
@@ -9,11 +10,15 @@ use crate::config;
 
 const REQUEST_MAGIC: [u8; 5] = *b"CESTR";
 const RESPONSE_MAGIC: [u8; 5] = *b"CESTP";
-const PROTOCOL_VERSION: u8 = 1;
+const PROTOCOL_VERSION: u8 = 3;
+const SAMPLE_INTERVAL_SECS: u64 = 60;
+const MAX_INBOX_REQUESTS: usize = 8;
+const MAX_INBOX_RESPONSES: usize = 8;
 const MAX_DEVICE_ID: usize = 32;
 const MAX_TIMESTEPS: usize = 60;
 
 struct SharedState {
+    model_fingerprint: [u8; 32],
     window_size: usize,
     hidden_size: usize,
     features_per_node: usize,
@@ -29,8 +34,14 @@ struct HiddenCache {
 }
 
 struct Inbox {
-    requests: VecDeque<Request>,
+    active_response: Option<(u64, u64)>,
+    requests: VecDeque<PendingRequest>,
     responses: Vec<Response>,
+}
+
+struct PendingRequest {
+    request: Request,
+    received_at: Instant,
 }
 
 static STATE: OnceLock<SharedState> = OnceLock::new();
@@ -39,6 +50,7 @@ static STATE: OnceLock<SharedState> = OnceLock::new();
 pub struct Request {
     pub requester: String,
     pub window_id: u64,
+    pub request_nonce: u64,
     pub timesteps: Vec<u16>,
 }
 
@@ -46,27 +58,52 @@ pub struct Request {
 pub struct Response {
     pub responder: String,
     pub window_id: u64,
+    pub request_nonce: u64,
     pub timesteps: Vec<u16>,
     pub hidden: Vec<f32>,
     pub features: Vec<f32>,
 }
 
-pub fn init(window_size: usize, hidden_size: usize, features_per_node: usize) {
-    let _ = STATE.set(SharedState {
-        window_size,
-        hidden_size,
-        features_per_node,
-        cache: Mutex::new(HiddenCache {
-            window_id: 0,
-            ready: false,
-            hidden: vec![0.0; window_size * hidden_size],
-            features: vec![0.0; window_size * features_per_node],
-        }),
-        inbox: Mutex::new(Inbox {
-            requests: VecDeque::new(),
-            responses: Vec::new(),
-        }),
-    });
+pub fn init(
+    window_size: usize,
+    hidden_size: usize,
+    features_per_node: usize,
+    model_fingerprint: &str,
+) -> Result<(), String> {
+    if model_fingerprint.len() != 64 || !model_fingerprint.is_ascii() {
+        return Err("model_fingerprint must be a SHA256 hex digest".to_owned());
+    }
+    let mut fingerprint = [0u8; 32];
+    for (index, byte) in fingerprint.iter_mut().enumerate() {
+        *byte = u8::from_str_radix(&model_fingerprint[index * 2..index * 2 + 2], 16)
+            .map_err(|_| "model_fingerprint must be a SHA256 hex digest".to_owned())?;
+    }
+    if window_size != MAX_TIMESTEPS
+        || hidden_size == 0
+        || hidden_size > u16::MAX as usize
+        || features_per_node != 1
+    {
+        return Err("unsupported exchange dimensions".to_owned());
+    }
+    STATE
+        .set(SharedState {
+            model_fingerprint: fingerprint,
+            window_size,
+            hidden_size,
+            features_per_node,
+            cache: Mutex::new(HiddenCache {
+                window_id: 0,
+                ready: false,
+                hidden: vec![0.0; window_size * hidden_size],
+                features: vec![0.0; window_size * features_per_node],
+            }),
+            inbox: Mutex::new(Inbox {
+                active_response: None,
+                requests: VecDeque::new(),
+                responses: Vec::new(),
+            }),
+        })
+        .map_err(|_| "exchange already initialized".to_owned())
 }
 
 fn state() -> Option<&'static SharedState> {
@@ -84,7 +121,20 @@ pub fn handle_frame(data: &[u8]) {
         if let Some(state) = state()
             && let Ok(mut inbox) = state.inbox.lock()
         {
-            inbox.requests.push_back(request);
+            inbox.requests.retain(|pending| {
+                pending.received_at.elapsed() < Duration::from_millis(config::EXCHANGE_WAIT_MS)
+            });
+            let duplicate = inbox.requests.iter().any(|pending| {
+                pending.request.requester == request.requester
+                    && pending.request.window_id == request.window_id
+                    && pending.request.request_nonce == request.request_nonce
+            });
+            if !duplicate && inbox.requests.len() < MAX_INBOX_REQUESTS {
+                inbox.requests.push_back(PendingRequest {
+                    request,
+                    received_at: Instant::now(),
+                });
+            }
         }
     } else if let Some(response) = decode_response(data) {
         debug!(
@@ -96,94 +146,142 @@ pub fn handle_frame(data: &[u8]) {
         if let Some(state) = state()
             && let Ok(mut inbox) = state.inbox.lock()
         {
-            inbox.responses.push(response);
+            if inbox.active_response == Some((response.window_id, response.request_nonce))
+                && inbox.responses.len() < MAX_INBOX_RESPONSES
+            {
+                inbox.responses.push(response);
+            }
         }
     } else {
         warn!("[EXCHANGE] dropped malformed exchange frame");
     }
 }
 
-pub fn update_cache(hidden: &[f32], features: &[f32]) -> u64 {
+pub fn invalidate_cache() {
+    if let Some(state) = state() {
+        if let Ok(mut cache) = state.cache.lock() {
+            cache.ready = false;
+        }
+        if let Ok(mut inbox) = state.inbox.lock() {
+            inbox.requests.clear();
+            inbox.responses.clear();
+            inbox.active_response = None;
+        }
+    }
+}
+
+pub fn update_cache(window_id: u64, hidden: &[f32], features: &[f32]) -> bool {
     let Some(state) = state() else {
-        return 0;
+        return false;
     };
     let Ok(mut cache) = state.cache.lock() else {
-        return cache_window_id(state);
+        return false;
     };
-    if hidden.len() != cache.hidden.len() || features.len() != cache.features.len() {
-        warn!("[EXCHANGE] hidden cache update ignored: payload size mismatch");
-        return cache.window_id;
+    cache.ready = false;
+    if !valid_window(window_id)
+        || hidden.len() != cache.hidden.len()
+        || features.len() != cache.features.len()
+        || hidden
+            .iter()
+            .chain(features)
+            .any(|value| !value.is_finite())
+    {
+        return false;
     }
-    cache.window_id += 1;
+    cache.window_id = window_id;
     cache.hidden.copy_from_slice(hidden);
     cache.features.copy_from_slice(features);
     cache.ready = true;
-    cache.window_id
+    true
 }
 
-fn cache_window_id(state: &SharedState) -> u64 {
-    state.cache.lock().map(|cache| cache.window_id).unwrap_or(0)
+fn valid_window(end: u64) -> bool {
+    end >= 1_700_000_000 && end % SAMPLE_INTERVAL_SECS == 0
+}
+
+fn window_start(end: u64) -> u64 {
+    end.saturating_sub((MAX_TIMESTEPS as u64 - 1) * SAMPLE_INTERVAL_SECS)
 }
 
 pub fn serve_pending_requests() -> Vec<(String, Vec<u8>)> {
     let Some(state) = state() else {
         return Vec::new();
     };
+    let Ok(cache) = state.cache.lock() else {
+        return Vec::new();
+    };
     let requests = {
         let Ok(mut inbox) = state.inbox.lock() else {
             return Vec::new();
         };
-        inbox.requests.drain(..).collect::<Vec<_>>()
-    };
-    if requests.is_empty() {
-        return Vec::new();
-    }
-    let cache = state.cache.lock();
-    let Ok(cache) = cache else {
-        return requests
-            .into_iter()
-            .map(|request| {
-                (
-                    request.requester,
-                    encode_response(config::DEVICE_ID, request.window_id, &[], &[], &[]),
-                )
-            })
-            .collect();
+        let mut ready = Vec::new();
+        inbox.requests.retain(|pending| {
+            let request = &pending.request;
+            if pending.received_at.elapsed() >= Duration::from_millis(config::EXCHANGE_WAIT_MS)
+                || request.window_id < cache.window_id
+                || request.timesteps.is_empty()
+            {
+                return false;
+            }
+            if cache.ready && request.window_id == cache.window_id {
+                ready.push(request.clone());
+                return false;
+            }
+            true
+        });
+        ready
     };
     requests
         .into_iter()
-        .map(|request| {
-            let payload = if cache.ready && !request.timesteps.is_empty() {
-                let mut hidden = Vec::with_capacity(request.timesteps.len() * state.hidden_size);
-                let mut features =
-                    Vec::with_capacity(request.timesteps.len() * state.features_per_node);
-                for timestep in &request.timesteps {
-                    let timestep = *timestep as usize;
-                    if timestep >= state.window_size {
-                        continue;
-                    }
-                    hidden.extend_from_slice(
-                        &cache.hidden
-                            [timestep * state.hidden_size..(timestep + 1) * state.hidden_size],
-                    );
-                    features.extend_from_slice(
-                        &cache.features[timestep * state.features_per_node
-                            ..(timestep + 1) * state.features_per_node],
-                    );
-                }
+        .filter_map(|request| {
+            if !cache.ready || request.window_id != cache.window_id || request.timesteps.is_empty()
+            {
+                return None;
+            }
+            let mut hidden = Vec::with_capacity(request.timesteps.len() * state.hidden_size);
+            let mut features =
+                Vec::with_capacity(request.timesteps.len() * state.features_per_node);
+            for timestep in &request.timesteps {
+                let timestep = *timestep as usize;
+                hidden.extend_from_slice(
+                    &cache.hidden[timestep * state.hidden_size..(timestep + 1) * state.hidden_size],
+                );
+                features.extend_from_slice(
+                    &cache.features[timestep * state.features_per_node
+                        ..(timestep + 1) * state.features_per_node],
+                );
+            }
+            Some((
+                request.requester,
                 encode_response(
                     config::DEVICE_ID,
-                    request.window_id,
+                    cache.window_id,
+                    request.request_nonce,
                     &request.timesteps,
                     &hidden,
                     &features,
-                )
-            } else {
-                encode_response(config::DEVICE_ID, request.window_id, &[], &[], &[])
-            };
-            (request.requester, payload)
+                ),
+            ))
         })
         .collect()
+}
+
+pub fn begin_response_cycle(window_id: u64, request_nonce: u64) {
+    if let Some(state) = state()
+        && let Ok(mut inbox) = state.inbox.lock()
+    {
+        inbox.responses.clear();
+        inbox.active_response = Some((window_id, request_nonce));
+    }
+}
+
+pub fn end_response_cycle() {
+    if let Some(state) = state()
+        && let Ok(mut inbox) = state.inbox.lock()
+    {
+        inbox.active_response = None;
+        inbox.responses.clear();
+    }
 }
 
 pub fn take_responses() -> Vec<Response> {
@@ -196,14 +294,24 @@ pub fn take_responses() -> Vec<Response> {
     std::mem::take(&mut inbox.responses)
 }
 
-pub fn encode_request(requester: &str, window_id: u64, timesteps: &[u16]) -> Vec<u8> {
+pub fn encode_request(
+    requester: &str,
+    window_id: u64,
+    request_nonce: u64,
+    timesteps: &[u16],
+) -> Vec<u8> {
     let mut frame =
         Vec::with_capacity(REQUEST_MAGIC.len() + 11 + requester.len() + timesteps.len() * 2);
     frame.extend_from_slice(&REQUEST_MAGIC);
     frame.push(PROTOCOL_VERSION);
     frame.push(requester.len() as u8);
     frame.extend_from_slice(requester.as_bytes());
+    if !write_compatibility(&mut frame) {
+        return Vec::new();
+    }
+    frame.extend_from_slice(&window_start(window_id).to_le_bytes());
     frame.extend_from_slice(&window_id.to_le_bytes());
+    frame.extend_from_slice(&request_nonce.to_le_bytes());
     frame.extend_from_slice(&(timesteps.len() as u16).to_le_bytes());
     for timestep in timesteps {
         frame.extend_from_slice(&timestep.to_le_bytes());
@@ -214,6 +322,7 @@ pub fn encode_request(requester: &str, window_id: u64, timesteps: &[u16]) -> Vec
 pub fn encode_response(
     responder: &str,
     window_id: u64,
+    request_nonce: u64,
     timesteps: &[u16],
     hidden: &[f32],
     features: &[f32],
@@ -225,7 +334,12 @@ pub fn encode_response(
     frame.push(PROTOCOL_VERSION);
     frame.push(responder.len() as u8);
     frame.extend_from_slice(responder.as_bytes());
+    if !write_compatibility(&mut frame) {
+        return Vec::new();
+    }
+    frame.extend_from_slice(&window_start(window_id).to_le_bytes());
     frame.extend_from_slice(&window_id.to_le_bytes());
+    frame.extend_from_slice(&request_nonce.to_le_bytes());
     frame.extend_from_slice(&(timesteps.len() as u16).to_le_bytes());
     for timestep in timesteps {
         frame.extend_from_slice(&timestep.to_le_bytes());
@@ -239,6 +353,42 @@ pub fn encode_response(
     frame
 }
 
+fn write_compatibility(frame: &mut Vec<u8>) -> bool {
+    let Some(state) = state() else {
+        return false;
+    };
+    frame.extend_from_slice(&state.model_fingerprint);
+    for value in [
+        state.window_size,
+        state.hidden_size,
+        state.features_per_node,
+        SAMPLE_INTERVAL_SECS as usize,
+    ] {
+        frame.extend_from_slice(&(value as u16).to_le_bytes());
+    }
+    true
+}
+
+fn read_compatibility(data: &[u8], offset: &mut usize) -> bool {
+    let mut expected = Vec::with_capacity(40);
+    if !write_compatibility(&mut expected) {
+        return false;
+    }
+    if data.get(*offset..*offset + expected.len()) != Some(expected.as_slice()) {
+        return false;
+    }
+    *offset += expected.len();
+    true
+}
+
+pub fn valid_request_frame(frame: &[u8]) -> bool {
+    decode_request(frame).is_some()
+}
+
+pub fn valid_response_frame(frame: &[u8]) -> bool {
+    decode_response(frame).is_some()
+}
+
 fn decode_request(data: &[u8]) -> Option<Request> {
     let offset = &mut 0;
     if !read_magic(data, offset, &REQUEST_MAGIC) {
@@ -249,7 +399,15 @@ fn decode_request(data: &[u8]) -> Option<Request> {
         return None;
     }
     let requester = read_device_id(data, offset)?;
+    if !read_compatibility(data, offset) {
+        return None;
+    }
+    let start = read_u64(data, offset)?;
     let window_id = read_u64(data, offset)?;
+    if !valid_window(window_id) || start != window_start(window_id) {
+        return None;
+    }
+    let request_nonce = read_u64(data, offset)?;
     let timesteps = read_timesteps(data, offset)?;
     if *offset != data.len() {
         return None;
@@ -257,6 +415,7 @@ fn decode_request(data: &[u8]) -> Option<Request> {
     Some(Request {
         requester,
         window_id,
+        request_nonce,
         timesteps,
     })
 }
@@ -272,7 +431,15 @@ fn decode_response(data: &[u8]) -> Option<Response> {
         return None;
     }
     let responder = read_device_id(data, offset)?;
+    if !read_compatibility(data, offset) {
+        return None;
+    }
+    let start = read_u64(data, offset)?;
     let window_id = read_u64(data, offset)?;
+    if !valid_window(window_id) || start != window_start(window_id) {
+        return None;
+    }
+    let request_nonce = read_u64(data, offset)?;
     let timesteps = read_timesteps(data, offset)?;
     let hidden = read_f32s(data, offset, timesteps.len() * state.hidden_size)?;
     let features = read_f32s(data, offset, timesteps.len() * state.features_per_node)?;
@@ -282,6 +449,7 @@ fn decode_response(data: &[u8]) -> Option<Response> {
     Some(Response {
         responder,
         window_id,
+        request_nonce,
         timesteps,
         hidden,
         features,
@@ -342,7 +510,11 @@ fn read_timesteps(data: &[u8], offset: &mut usize) -> Option<Vec<u16>> {
         if *offset + 2 > data.len() {
             return None;
         }
-        timesteps.push(u16::from_le_bytes([data[*offset], data[*offset + 1]]));
+        let timestep = u16::from_le_bytes([data[*offset], data[*offset + 1]]);
+        if timestep as usize >= state()?.window_size || timesteps.contains(&timestep) {
+            return None;
+        }
+        timesteps.push(timestep);
         *offset += 2;
     }
     Some(timesteps)
@@ -356,7 +528,11 @@ fn read_f32s(data: &[u8], offset: &mut usize, count: usize) -> Option<Vec<f32>> 
         }
         let mut bytes = [0u8; 4];
         bytes.copy_from_slice(&data[*offset..*offset + 4]);
-        values.push(f32::from_le_bytes(bytes));
+        let value = f32::from_le_bytes(bytes);
+        if !value.is_finite() {
+            return None;
+        }
+        values.push(value);
         *offset += 4;
     }
     Some(values)

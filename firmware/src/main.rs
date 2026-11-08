@@ -10,7 +10,7 @@ mod inference;
 mod mqtt;
 mod wifi;
 
-use std::sync::mpsc::Sender;
+use std::collections::VecDeque;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -51,7 +51,7 @@ fn main() {
     };
 
     let _wifi = wifi::connect();
-    sync_time();
+    let _sntp = sync_time();
 
     let mut classifier = if config::INFERENCE_ENABLED {
         let sender_indices: Vec<usize> = config::NEIGHBORS
@@ -82,29 +82,84 @@ fn main() {
         None
     };
 
-    if let Some(classifier) = classifier.as_ref() {
-        exchange::init(
-            classifier.window_size(),
-            classifier.hidden_size(),
-            classifier.features_per_node(),
-        );
+    if let Some(active) = classifier.as_ref() {
+        if let Err(error) = exchange::init(
+            active.window_size(),
+            active.hidden_size(),
+            active.features_per_node(),
+            active.model_fingerprint(),
+        ) {
+            log::error!(
+                "[INFERENCE] exchange compatibility validation failed: {}",
+                error
+            );
+            classifier = None;
+        }
     }
     let espnow = espnow::start();
     let publisher = mqtt::start();
 
     let topic = format!("{}{}", config::MQTT_TOPIC_PREFIX, config::DEVICE_ID);
 
+    let cadence = if let Some(classifier) = classifier.as_ref() {
+        classifier.sample_interval_secs()
+    } else if config::INFERENCE_ENABLED || fault_injector.is_some() {
+        60
+    } else {
+        config::SEND_INTERVAL_SECS
+    };
+    let sample_interval = Duration::from_secs(cadence);
+    let mut next_slot = (timestamp_epoch() / cadence + 1) * cadence;
+    let mut previous_slot = None;
+    let mut emitted_labels = VecDeque::new();
+    info!(
+        "[DHT] cadence_seconds={} inference_enabled={} aligned_epoch_slots=true",
+        cadence,
+        config::INFERENCE_ENABLED
+    );
     loop {
+        let sample_timestamp = wait_for_slot(&mut next_slot, cadence);
+        if previous_slot.is_some_and(|previous| sample_timestamp != previous + cadence) {
+            log::warn!("[INFERENCE] skipped sample slot; dropping incomplete window");
+            reset_window(&mut classifier, &mut emitted_labels);
+        }
+        previous_slot = Some(sample_timestamp);
+        let sample_started = Instant::now();
         match normal_dht_sensor.read(true) {
             Ok(reading) => {
-                if let Some(classifier) = classifier.as_mut()
-                    && classifier.push_temperature(reading.temperature)
-                {
-                    run_diagnosis_cycle(classifier, &espnow, &publisher, &topic);
+                let injected = fault_injector.as_mut().map(|injector| {
+                    let temperature = injector.apply(reading.temperature);
+                    (temperature, injector.emitted_mode())
+                });
+                let inference_temperature = injected
+                    .map(|(temperature, _)| temperature)
+                    .unwrap_or(reading.temperature);
+                let read_finished = timestamp_epoch();
+                let sample_valid = read_finished >= sample_timestamp
+                    && read_finished < sample_timestamp + cadence
+                    && sample_started.elapsed() < sample_interval;
+                if !sample_valid {
+                    reset_window(&mut classifier, &mut emitted_labels);
+                } else if let Some(classifier) = classifier.as_mut() {
+                    if emitted_labels.len() == classifier.window_size() {
+                        emitted_labels.pop_front();
+                    }
+                    emitted_labels
+                        .push_back(injected.map(|(_, mode)| mode.as_str()).unwrap_or("normal"));
+                    if classifier.push_temperature(inference_temperature) {
+                        run_diagnosis_cycle(
+                            classifier,
+                            &espnow,
+                            &publisher,
+                            &topic,
+                            sample_timestamp,
+                            &emitted_labels,
+                        );
+                    }
                 }
                 let payload = serde_json::json!({
                     "device_id": config::DEVICE_ID,
-                    "timestamp": timestamp_epoch(),
+                    "timestamp": sample_timestamp,
                     "temperature": reading.temperature,
                     "humidity": reading.humidity,
                     "path": "normal",
@@ -120,21 +175,20 @@ fn main() {
                 );
                 publish_json(&publisher, &topic, payload);
 
-                if let Some(injector) = fault_injector.as_mut() {
-                    let faulted_temperature = injector.apply(reading.temperature);
+                if let Some((faulted_temperature, fault_mode)) = injected {
                     let payload = serde_json::json!({
                         "device_id": config::DEVICE_ID,
-                        "timestamp": timestamp_epoch(),
+                        "timestamp": sample_timestamp,
                         "temperature": faulted_temperature,
                         "humidity": reading.humidity,
                         "path": "fault",
-                        "fault_mode": config::FAULT_CONFIG.mode.as_str(),
+                        "fault_mode": fault_mode.as_str(),
                         "gpio": config::FAULT_CONFIG.read_pin,
                         "source": "software",
                     });
                     info!(
                         "[DHT] path=fault fault={} source=software temperature={:.1}°C (base {:.1}°C) payload={}",
-                        config::FAULT_CONFIG.mode.as_str(),
+                        fault_mode.as_str(),
                         faulted_temperature,
                         reading.temperature,
                         payload
@@ -143,6 +197,7 @@ fn main() {
                 }
             }
             Err(e) => {
+                reset_window(&mut classifier, &mut emitted_labels);
                 log::warn!(
                     "[DHT] path=normal gpio={} read failed: {:?}, skipping",
                     config::DHT_PIN,
@@ -152,11 +207,12 @@ fn main() {
         }
 
         if let Some(sensor) = fault_dht_sensor.as_mut() {
+            let sample_timestamp = timestamp_epoch();
             match sensor.read(config::FAULT_CONFIG.checksum_enabled()) {
                 Ok(reading) => {
                     let payload = serde_json::json!({
                         "device_id": config::DEVICE_ID,
-                        "timestamp": timestamp_epoch(),
+                        "timestamp": sample_timestamp,
                         "temperature": reading.temperature,
                         "humidity": reading.humidity,
                         "path": "fault",
@@ -183,8 +239,34 @@ fn main() {
                 }
             }
         }
+    }
+}
 
-        thread::sleep(Duration::from_secs(config::SEND_INTERVAL_SECS));
+fn reset_window(classifier: &mut Option<NodeClassifier>, labels: &mut VecDeque<&str>) {
+    if let Some(classifier) = classifier.as_mut() {
+        classifier.reset_window();
+    }
+    labels.clear();
+    exchange::invalidate_cache();
+}
+
+fn wait_for_slot(next_slot: &mut u64, cadence: u64) -> u64 {
+    loop {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::SystemTime::UNIX_EPOCH)
+            .unwrap_or_default();
+        let target = Duration::from_secs(*next_slot);
+        if now < target && target - now > Duration::from_secs(cadence) {
+            *next_slot = (now.as_secs() / cadence + 1) * cadence;
+        } else if now < target {
+            thread::sleep((target - now).min(Duration::from_millis(200)));
+        } else if now - target > Duration::from_secs(2) {
+            *next_slot = (now.as_secs() / cadence + 1) * cadence;
+        } else {
+            let slot = *next_slot;
+            *next_slot += cadence;
+            return slot;
+        }
     }
 }
 
@@ -193,27 +275,45 @@ fn main() {
 /// diagnosis telemetry message.
 fn run_diagnosis_cycle(
     classifier: &mut NodeClassifier,
-    espnow: &Sender<espnow::EspNowJob>,
+    espnow: &espnow::EspNowSender,
     publisher: &mqtt::Publisher,
     topic: &str,
+    window_id: u64,
+    emitted_labels: &VecDeque<&str>,
 ) {
-    let request_pass = match classifier.predict(None) {
-        Ok(pass) => pass,
-        Err(error) => {
-            log::error!("[INFERENCE] request pass failed: {}", error);
+    let available = espnow::registered_peer_mask();
+    for (neighbor, available) in available.iter().enumerate() {
+        if let Err(error) = classifier.set_neighbor_available(neighbor, *available) {
+            log::error!("[INFERENCE] peer availability invalid: {}", error);
             return;
         }
-    };
-    let window_id = exchange::update_cache(&request_pass.hidden, classifier.features());
+    }
+    let request_pass =
+        match classifier.predict(None) {
+            Ok(pass) => pass,
+            Err(error) => {
+                log::error!("[INFERENCE] request pass failed: {}", error);
+                return;
+            }
+        };
+    if !exchange::update_cache(window_id, &request_pass.hidden, classifier.features()) {
+        log::error!("[EXCHANGE] refusing invalid window cache");
+        return;
+    }
     let requested = classifier.threshold_requests(&request_pass.request);
 
+    let request_nonce = unsafe {
+        ((esp_idf_svc::sys::esp_random() as u64) << 32) | esp_idf_svc::sys::esp_random() as u64
+    };
+    exchange::begin_response_cycle(window_id, request_nonce);
     let mut outstanding = 0;
     for (neighbor, timesteps) in requested.iter().enumerate() {
         outstanding += timesteps.len();
         if timesteps.is_empty() {
             continue;
         }
-        let payload = exchange::encode_request(config::DEVICE_ID, window_id, timesteps);
+        let payload =
+            exchange::encode_request(config::DEVICE_ID, window_id, request_nonce, timesteps);
         if espnow
             .send(espnow::EspNowJob {
                 target: config::NEIGHBORS[neighbor].mac,
@@ -233,7 +333,7 @@ fn run_diagnosis_cycle(
     while outstanding > 0 && Instant::now() < deadline {
         thread::sleep(Duration::from_millis(config::EXCHANGE_POLL_MS));
         for response in exchange::take_responses() {
-            if response.window_id != window_id {
+            if response.window_id != window_id || response.request_nonce != request_nonce {
                 continue;
             }
             let Some(neighbor) = config::NEIGHBORS
@@ -264,6 +364,7 @@ fn run_diagnosis_cycle(
         }
     }
 
+    exchange::end_response_cycle();
     let aggregate_pass = match classifier.predict(Some(&slots)) {
         Ok(pass) => pass,
         Err(error) => {
@@ -272,6 +373,11 @@ fn run_diagnosis_cycle(
         }
     };
     let diagnosis = classifier.diagnosis(&aggregate_pass);
+    let decoded_labels: Vec<&str> = aggregate_pass
+        .decoded
+        .iter()
+        .map(|class| ["NORMAL", "SPIKE", "DRIFT", "STUCK"][*class])
+        .collect();
     let requested_summary: Vec<(&str, usize)> = requested
         .iter()
         .enumerate()
@@ -304,6 +410,12 @@ fn run_diagnosis_cycle(
         "timestamp": timestamp_epoch(),
         "type": "inference",
         "window_id": window_id,
+        "window_start_timestamp": window_id - (classifier.window_size() as u64 - 1) * 60,
+        "window_end_timestamp": window_id,
+        "sample_interval_seconds": 60,
+        "emitted_labels": emitted_labels,
+        "decoded_classes": aggregate_pass.decoded,
+        "decoded_labels": decoded_labels,
         "communication_mode": classifier.communication_mode(),
         "label": diagnosis.label,
         "class": diagnosis.class,
@@ -322,16 +434,16 @@ fn publish_json(publisher: &mqtt::Publisher, topic: &str, payload: serde_json::V
     if publisher
         .send(PublishJob {
             topic: topic.to_owned(),
-            payload: message.clone().into_bytes(),
+            payload: message.into_bytes(),
         })
         .is_err()
     {
-        log::error!("[MQTT] publish queue closed topic={}", topic);
+        log::error!("[MQTT] publish queue full or closed topic={}", topic);
     }
 }
 
 /// Block until SNTP time sync completes or the configured timeout elapses.
-fn sync_time() {
+fn sync_time() -> EspSntp<'static> {
     let timeout_ms = config::NTP_SYNC_TIMEOUT_SECS * 1_000;
     let poll_ms = config::NTP_SYNC_POLL_MS;
     let max_attempts = timeout_ms.div_ceil(poll_ms);
@@ -350,26 +462,35 @@ fn sync_time() {
     };
     let sntp = EspSntp::new(&conf).expect("Failed to create SNTP client");
 
+    let started = Instant::now();
     let mut attempts = 0;
-    let mut elapsed_ms = 0;
-    while sntp.get_sync_status() != SyncStatus::Completed && attempts < max_attempts {
+    loop {
+        let status = sntp.get_sync_status();
+        if status == SyncStatus::Completed {
+            info!(
+                "[NTP] Time synced server={} after {} ms epoch={}",
+                config::NTP_SERVER,
+                started.elapsed().as_millis(),
+                timestamp_epoch()
+            );
+            break;
+        }
+        if attempts >= max_attempts {
+            log::warn!(
+                "[NTP] Still waiting for {} after {} ms, status {:?}",
+                config::NTP_SERVER,
+                started.elapsed().as_millis(),
+                status
+            );
+            if !config::INFERENCE_ENABLED {
+                break;
+            }
+            attempts = 0;
+        }
         thread::sleep(Duration::from_millis(poll_ms));
         attempts += 1;
-        elapsed_ms += poll_ms;
     }
-
-    if sntp.get_sync_status() == SyncStatus::Completed {
-        info!("[NTP] Time synced after {} ms", elapsed_ms);
-    } else {
-        log::warn!(
-            "[NTP] Sync timed out after {} ms using {}, final status {:?}, timestamps may use uptime",
-            elapsed_ms,
-            config::NTP_SERVER,
-            sntp.get_sync_status()
-        );
-    }
-
-    std::mem::forget(sntp);
+    sntp
 }
 
 /// Current epoch seconds; 0 while the clock is unsynchronized.
