@@ -1,6 +1,7 @@
 //! MQTT worker.
 
-use std::sync::mpsc::{Receiver, Sender, channel};
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::mpsc::{Receiver, SyncSender, TrySendError, sync_channel};
 use std::thread;
 use std::time::Duration;
 
@@ -15,13 +16,35 @@ pub struct PublishJob {
     pub payload: Vec<u8>,
 }
 
-pub fn start() -> Sender<PublishJob> {
-    let (sender, receiver) = channel();
+static QUEUE_DROPS: AtomicU32 = AtomicU32::new(0);
+static PUBLISH_FAILURES: AtomicU32 = AtomicU32::new(0);
+static ACKNOWLEDGED: AtomicU32 = AtomicU32::new(0);
+
+pub struct Publisher(SyncSender<PublishJob>);
+
+impl Publisher {
+    pub fn send(&self, job: PublishJob) -> Result<(), TrySendError<PublishJob>> {
+        self.0.try_send(job).inspect_err(|_| {
+            QUEUE_DROPS.fetch_add(1, Ordering::Relaxed);
+        })
+    }
+}
+
+pub fn telemetry_snapshot() -> serde_json::Value {
+    serde_json::json!({
+        "queue_drops": QUEUE_DROPS.load(Ordering::Relaxed),
+        "publish_failures": PUBLISH_FAILURES.load(Ordering::Relaxed),
+        "acknowledged": ACKNOWLEDGED.load(Ordering::Relaxed),
+    })
+}
+
+pub fn start() -> Publisher {
+    let (sender, receiver) = sync_channel(config::MQTT_QUEUE_CAPACITY);
     thread::Builder::new()
         .stack_size(16 * 1024)
         .spawn(move || run(receiver))
         .expect("Failed to spawn MQTT worker");
-    sender
+    Publisher(sender)
 }
 
 fn run(receiver: Receiver<PublishJob>) {
@@ -68,14 +91,13 @@ fn connect() -> EspMqttClient<'static> {
             info!("[MQTT] disconnected");
         }
         EventPayload::Published(message_id) => {
+            ACKNOWLEDGED.fetch_add(1, Ordering::Relaxed);
             info!("[MQTT] publish acknowledged message_id={}", message_id);
         }
-        EventPayload::Error(error) => {
-            error!("[MQTT] event error: {:?}", error);
+        EventPayload::Error(_) => {
+            error!("[MQTT] event error");
         }
-        payload => {
-            debug!("[MQTT] Event: {:?}", payload);
-        }
+        _ => {}
     })
     .expect("Failed to create MQTT client");
 
@@ -93,6 +115,9 @@ fn publish(client: &mut EspMqttClient<'static>, topic: &str, payload: &[u8]) {
                 payload.len()
             );
         }
-        Err(error) => error!("[MQTT] publish failed topic={}: {:?}", topic, error),
+        Err(error) => {
+            PUBLISH_FAILURES.fetch_add(1, Ordering::Relaxed);
+            error!("[MQTT] publish failed topic={}: {:?}", topic, error);
+        }
     }
 }

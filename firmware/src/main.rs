@@ -194,7 +194,7 @@ fn main() {
 fn run_diagnosis_cycle(
     classifier: &mut NodeClassifier,
     espnow: &Sender<espnow::EspNowJob>,
-    publisher: &Sender<PublishJob>,
+    publisher: &mqtt::Publisher,
     topic: &str,
 ) {
     let request_pass = match classifier.predict(None) {
@@ -317,7 +317,7 @@ fn run_diagnosis_cycle(
     publish_json(publisher, topic, payload);
 }
 
-fn publish_json(publisher: &Sender<PublishJob>, topic: &str, payload: serde_json::Value) {
+fn publish_json(publisher: &mqtt::Publisher, topic: &str, payload: serde_json::Value) {
     let message = serde_json::to_string(&payload).unwrap();
     if publisher
         .send(PublishJob {

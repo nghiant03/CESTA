@@ -9,6 +9,7 @@ pub const WIFI_PASSWORD: &str = "2222288888";
 
 pub const MQTT_SERVER: &str = "192.168.0.145";
 pub const MQTT_PORT: u16 = 1883;
+pub const MQTT_QUEUE_CAPACITY: usize = 16;
 pub const MQTT_USER: &str = "";
 pub const MQTT_PASSWORD: &str = "";
 
