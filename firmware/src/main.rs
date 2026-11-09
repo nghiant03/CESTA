@@ -2,10 +2,19 @@
 
 mod config;
 mod dht;
+#[cfg(not(hifinet))]
 mod diagnostic;
 mod espnow;
+#[cfg(not(hifinet))]
+mod exchange;
+#[cfg(hifinet)]
+#[path = "hifinet_exchange.rs"]
 mod exchange;
 mod fault;
+#[cfg(not(hifinet))]
+mod inference;
+#[cfg(hifinet)]
+#[path = "hifinet.rs"]
 mod inference;
 mod mqtt;
 mod resampling;
@@ -28,6 +37,7 @@ fn main() {
     esp_idf_svc::sys::link_patches();
     esp_idf_svc::log::EspLogger::initialize_default();
 
+    #[cfg(not(hifinet))]
     if config::INFERENCE_SYNTHETIC_DIAGNOSTIC {
         diagnostic::run();
     }
@@ -385,6 +395,7 @@ fn wait_for_slot(next_slot: &mut u64, cadence: u64) -> u64 {
 /// One distributed CESTA diagnosis cycle: receiver-local request pass, neighbor
 /// exchange over ESP-NOW, aggregate pass with received payloads, and a
 /// diagnosis telemetry message.
+#[cfg(not(hifinet))]
 fn run_diagnosis_cycle(
     classifier: &mut NodeClassifier,
     espnow: &espnow::EspNowSender,
@@ -794,4 +805,18 @@ fn timestamp_epoch() -> u64 {
         .duration_since(SystemTime::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0)
+}
+
+#[cfg(hifinet)]
+fn run_diagnosis_cycle(
+    classifier: &mut NodeClassifier,
+    radio: &espnow::EspNowSender,
+    publisher: &mqtt::Publisher,
+    topic: &str,
+    window_id: u64,
+    ready: u64,
+    labels: &VecDeque<&str>,
+    telemetry: &mut telemetry::Telemetry,
+) {
+    classifier.run_cycle(radio, publisher, topic, window_id, ready, labels, telemetry);
 }

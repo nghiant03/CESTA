@@ -35,7 +35,7 @@ impl Telemetry {
         payload["node_index"] = json!(config::NODE_INDEX);
         payload["boot_id"] = json!(self.boot_id);
         payload["event_seq"] = json!(self.event_seq);
-        payload["model_name"] = json!("cesta");
+        payload["model_name"] = json!(if cfg!(hifinet) { "hifinet" } else { "cesta" });
         payload["execution_location"] = json!("device");
         let topic = format!(
             "cesta/benchmarks/{}/{}",
@@ -65,7 +65,12 @@ impl Telemetry {
             json!({
                 "type": "benchmark_status",
                 "timestamp": timestamp,
-                "checkpoint_sha256": classifier.map(NodeClassifier::model_fingerprint),
+                "checkpoint_sha256": classifier.map(|active| {
+                    #[cfg(hifinet)]
+                    { let _ = active; crate::inference::CHECKPOINT }
+                    #[cfg(not(hifinet))]
+                    { active.model_fingerprint() }
+                }),
                 "reason": reason,
             }),
         );
