@@ -108,3 +108,9 @@ All alternative backends are opt-in and rejected by firmware export. Preserve de
 - Compatible internal scaling includes zero-filled missing samples; incomplete windows are not equivalent to standalone complete-window inference. Masks still control loss/decoding/communication. Do not change trained preprocessing without a separately validated recipe.
 
 Retain tracked experiment files only when they support the paper's Intel results, planned DHT accuracy/macro-F1 comparison, or their reproducibility dependencies. The retained `cesta-dht-gru-control.yaml` and `cesta-window-standardization.yaml` support the DHT training lineage and shared runner. Alternative-backend implementation contracts above remain relevant to checkpoint compatibility, but unrelated experiment recipes and diagnostic results are not maintained here. Do not delete untracked or ignored run artifacts during tracked-file cleanup.
+
+### HiFiNet firmware
+
+- Select HiFiNet with build-time `FIRMWARE_MODEL=hifinet`, an absolute `HIFINET_BUNDLE`, and `HIFINET_RECEIVER`; default CESTA remains independent. Validate the complete bundle before embedding receiver-specific stages.
+- Preserve temporal → three graph stages → classifier, retained temporal embeddings, raw features, self loops, trained round widths, binary received masks, and first-index argmax without CRF.
+- Radio identity includes bundle fingerprint, window, nonce and round; retain old round caches until the common window cutoff. Never accept CESTA or stale/wrong-round responses. Report actual per-round receipts and explicit degraded coverage, never infer full graph completeness from local peer registration.

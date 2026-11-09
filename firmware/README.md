@@ -63,7 +63,7 @@ Export targets:
 - `node` (default): one graph receiver with its sender list; pass the device's graph index as `--receiver-index` and list the same senders in `NEIGHBORS` in `sender_indices` order.
 - `local` and `graph` are rejected by the current firmware exporter: their probability-output wrappers do not satisfy the v3 distributed raw-logit/CRF contract.
 
-## Common stage runtime and HiFiNet boundary
+## Common stage runtime and HiFiNet application
 
 `components/tflite_micro` is the model-neutral TFLite Micro bridge used by CESTA through `src/tflite.rs`. Its 35-operator resolver includes `MEAN`, `RSQRT`, and `SQUARED_DIFFERENCE` for exported HiFiNet stages. It verifies the FlatBuffer and schema and requires one float32 input and output, each shaped `[1, 60, width]`.
 
@@ -74,7 +74,27 @@ Export targets:
 
 Reuse one runner across sequential stages: it owns at most one interpreter and arena plus one model copy, not five arenas. Tensor allocation retains idle-priority scheduling; operator profiling yields periodically during invocation. The C API exports `tflite_micro_create`, `tflite_micro_destroy`, `tflite_micro_last_error`, `tflite_micro_input_count`, `tflite_micro_output_count`, and `tflite_micro_predict`. A creation error may return a handle that still requires destruction. CESTA retains its existing packed inputs, outputs, request logic, and CRF decoding.
 
-This delivers **stage execution**, not a distributed HiFiNet application. The host bundle `runs/hifinet-relocation-export-seed12-20261109T2106Z/bundle` contains 14 stages totaling 846,724 model bytes. Each node needs one temporal stage, its three receiver-specific graph stages, and the classifier, with no CRF. The application still embeds only CESTA. HiFiNet bundle installation/selection, manifest/topology validation, round-specific packing, multi-round radio synchronization, classifier decoding, and on-device numerical/memory/timing validation remain required. Do not install a single stage as the CESTA node model or interpret a successful build as full HiFiNet deployment support.
+HiFiNet is selected at build time; the default remains CESTA. `src/hifinet.rs` runs temporal → graph 0 → graph 1 → graph 2 → classifier through one runner, retains the original temporal embedding for the classifier, and decodes each timestep by first-index argmax without CRF. Raw temperature windows are never standardized. Exported graph stages include the always-available self loop; absent remote payloads are zero-filled and masked.
+
+```bash
+# From repository root; optional copied installation into an empty directory
+uv run python scripts/install_hifinet.py \
+  --bundle runs/hifinet-relocation-export-seed12-20261109T2106Z/bundle \
+  --output firmware/model/hifinet
+
+# From firmware; receiver must match config.rs NODE_INDEX and ordered NEIGHBORS
+FIRMWARE_MODEL=hifinet \
+HIFINET_BUNDLE="$PWD/model/hifinet" HIFINET_RECEIVER=3 \
+cargo build
+```
+
+The build reruns bundle validation and embeds only the selected receiver's five stages. Validation covers stage hashes/lengths, declared operators/shapes, all receivers and graph edge order, three trained payload widths, cadence, preprocessing, decoder, and recorded conversion parity. Runtime verifies FlatBuffers and actual float32 tensor shapes while loading all five stages at startup; configuration mismatch disables inference. Compatibility identity hashes the canonical model/wire contract, topology/order, trained widths, preprocessing/decoder, provenance hashes, and sorted stage hashes/shapes across all receivers. Incidental source paths and validation results are excluded, so relocating an identical bundle does not break compatibility. Historic `missing_micro_operators` entries are accepted only when the current resolver now supports them.
+
+HiFiNet exchange uses protocol version 4, rejects CESTA version 3 and different bundle fingerprints, and identifies each response by window, random nonce, and round in the nonce's high byte. Each window retains all three prior-stage caches until its common nominal-close-relative exchange cutoff so faster nodes can answer slower peers. The three round receive cutoffs divide that exchange budget equally; requests retry missing timesteps every two seconds. Payloads contain only that round's trained hidden width. Inference may continue with masked missing senders after a round cutoff; the common cycle deadline still discards late results. No previous window or different round payload is reused.
+
+Benchmark telemetry retains the common schema-1 timing, communication edges, decision/window timestamps and prediction policy. Aggregated counts use `(round, edge, timestep)` identities: dense counts are `180 * neighbors`, and dense float payload bytes are `60 * neighbors * 4 * sum(round_widths)`. Per-edge requested/received byte totals use each round’s actual width; no single payload width is advertised across unequal rounds. Stage loading and invocation each check the common cycle deadline before admission and check again after execution. Benchmark telemetry reports every attempted round's per-edge requested/received timestep counts, retry/queue counts, width, cache admission and elapsed time, plus actual stage times and failures. Registered ESP-NOW peers are not claimed compatible merely because their MAC is registered. Inference explicitly labels zero received payloads `degraded_no_compatible_peer_payloads` (which also covers unreachable peers), and partial receipts `degraded_partial_round_payloads`. Even complete direct-neighbor receipts do not prove remote upstream graph completeness, so `full_graph_verified` remains false. A mixed CESTA/HiFiNet fleet cannot perform the full distributed HiFiNet graph; all participating nodes require matching bundles and node-specific builds.
+
+The validated seed12 host bundle contains 14 stages totaling 846,724 model bytes. Host numerical parity and successful firmware compilation do not establish on-device numerical parity, heap headroom, radio delivery, or deadline performance; these require connected-board and multi-node validation. The CESTA synthetic diagnostic is not substituted for HiFiNet inference and is excluded from HiFiNet builds.
 
 ## Build and flash
 
