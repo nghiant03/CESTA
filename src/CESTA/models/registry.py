@@ -10,10 +10,11 @@ import inspect
 from typing import Any
 
 from CESTA.models.base import BaseModel
-from CESTA.models.spatial import CESTAClassifier, DCRNNClassifier, HiFiNetClassifier, HMCTClassifier, STGCNClassifier
+from CESTA.models.spatial import CESTAClassifier, DCRNNClassifier, HiFiNetClassifier, STGCNClassifier
 from CESTA.models.temporal import (
     AutoformerClassifier,
     CNN1DClassifier,
+    HMCTClassifier,
     HydraClassifier,
     InformerClassifier,
     ModernTCNClassifier,
