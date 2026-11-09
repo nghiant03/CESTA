@@ -8,10 +8,12 @@ mod exchange;
 mod fault;
 mod inference;
 mod mqtt;
+mod resampling;
 mod telemetry;
 mod wifi;
 
 use std::collections::VecDeque;
+use std::sync::{Arc, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -36,21 +38,6 @@ fn main() {
     );
 
     let _peripherals = esp_idf_hal::peripherals::Peripherals::take().unwrap();
-    let dht_pin = unsafe { esp_idf_hal::gpio::AnyIOPin::new(config::DHT_PIN) };
-    let mut normal_dht_sensor = dht::Dht11Sensor::new(dht_pin);
-    let mut fault_dht_sensor = if config::FAULT_CONFIG.uses_fault_read_pin(config::DHT_PIN) {
-        Some(dht::Dht11Sensor::new(unsafe {
-            esp_idf_hal::gpio::AnyIOPin::new(config::FAULT_CONFIG.read_pin)
-        }))
-    } else {
-        None
-    };
-    let mut fault_injector = if config::FAULT_CONFIG.mode.is_software_injected() {
-        Some(fault::FaultInjector::new(config::FAULT_CONFIG))
-    } else {
-        None
-    };
-
     let _wifi = wifi::connect();
     let _sntp = sync_time();
 
@@ -98,7 +85,7 @@ fn main() {
         }
     }
     let espnow = espnow::start();
-    let publisher = mqtt::start();
+    let publisher = Arc::new(mqtt::start());
     let mut telemetry = telemetry::Telemetry::new();
     telemetry.status(
         &publisher,
@@ -112,73 +99,57 @@ fn main() {
 
     let topic = format!("{}{}", config::MQTT_TOPIC_PREFIX, config::DEVICE_ID);
 
-    let cadence = if let Some(classifier) = classifier.as_ref() {
-        classifier.sample_interval_secs()
-    } else if config::INFERENCE_ENABLED || fault_injector.is_some() {
-        60
-    } else {
-        config::SEND_INTERVAL_SECS
-    };
-    let sample_interval = Duration::from_secs(cadence);
-    let mut next_slot = (timestamp_epoch() / cadence + 1) * cadence;
+    let cadence = classifier
+        .as_ref()
+        .map(NodeClassifier::sample_interval_secs)
+        .unwrap_or(config::FAULT_SAMPLE_INTERVAL_SECS);
+    assert!(config::SEND_INTERVAL_SECS > 0 && cadence % config::SEND_INTERVAL_SECS == 0);
+    let (sample_sender, samples) = mpsc::sync_channel(1);
+    let sampling_publisher = Arc::clone(&publisher);
+    thread::Builder::new()
+        .name("dht-sampling".into())
+        .stack_size(16 * 1024)
+        .spawn(move || sample_sensors(sampling_publisher, sample_sender, cadence))
+        .expect("Failed to spawn DHT sampling worker");
     let mut previous_slot = None;
     let mut emitted_labels = VecDeque::new();
-    info!(
-        "[DHT] cadence_seconds={} inference_enabled={} aligned_epoch_slots=true",
-        cadence,
-        config::INFERENCE_ENABLED
-    );
-    loop {
-        let sample_timestamp = wait_for_slot(&mut next_slot, cadence);
+    for sample in samples {
+        let sample_timestamp = sample.timestamp;
         telemetry.samples_observed += 1;
-        if previous_slot.is_some_and(|previous| sample_timestamp != previous + cadence) {
-            log::warn!("[INFERENCE] skipped sample slot; dropping incomplete window");
+        let failure = if sample.discontinuity
+            || previous_slot.is_some_and(|previous| sample_timestamp != previous + cadence)
+        {
+            Some("sample_slot_missed")
+        } else {
+            None
+        };
+        previous_slot = Some(sample_timestamp);
+        if let Some(reason) = failure {
             telemetry.sample_resets += 1;
-            telemetry.status(
-                &publisher,
-                classifier.as_ref(),
-                sample_timestamp,
-                "sample_slot_missed",
-            );
+            telemetry.status(&publisher, classifier.as_ref(), sample_timestamp, reason);
             reset_window(&mut classifier, &mut emitted_labels);
         }
-        previous_slot = Some(sample_timestamp);
-        let sample_started = Instant::now();
-        match normal_dht_sensor.read(true) {
-            Ok(reading) => {
-                let injected = fault_injector.as_mut().map(|injector| {
-                    let temperature = injector.apply(reading.temperature);
-                    (temperature, injector.emitted_mode())
-                });
-                let inference_temperature = injected
-                    .map(|(temperature, _)| temperature)
-                    .unwrap_or(reading.temperature);
-                let read_finished = timestamp_epoch();
-                let sample_valid = read_finished >= sample_timestamp
-                    && read_finished < sample_timestamp + cadence
-                    && sample_started.elapsed() < sample_interval;
-                if !sample_valid {
-                    telemetry.sample_resets += 1;
-                    telemetry.status(
-                        &publisher,
-                        classifier.as_ref(),
-                        sample_timestamp,
-                        "sample_late",
-                    );
-                    reset_window(&mut classifier, &mut emitted_labels);
-                } else if let Some(classifier) = classifier.as_mut() {
+        let now = timestamp_epoch();
+        let value = if !resampling::bucket_is_fresh(sample_timestamp, now, cadence) {
+            Err("sample_late")
+        } else {
+            sample.value
+        };
+        match value {
+            Ok((temperature, label)) => {
+                if let Some(classifier) = classifier.as_mut() {
                     if emitted_labels.len() == classifier.window_size() {
                         emitted_labels.pop_front();
                     }
-                    emitted_labels
-                        .push_back(injected.map(|(_, mode)| mode.as_str()).unwrap_or("normal"));
-                    if classifier.push_temperature(inference_temperature) {
+                    emitted_labels.push_back(label);
+                    if classifier.push_temperature(temperature) {
                         run_diagnosis_cycle(
                             classifier,
                             &espnow,
                             &publisher,
                             &topic,
                             sample_timestamp,
+                            sample.ready_epoch_us,
                             &emitted_labels,
                             &mut telemetry,
                         );
@@ -193,11 +164,138 @@ fn main() {
                 } else {
                     telemetry.status(&publisher, None, sample_timestamp, "inference_unavailable");
                 }
+            }
+            Err(reason) => {
+                telemetry.sample_resets += 1;
+                telemetry.status(&publisher, classifier.as_ref(), sample_timestamp, reason);
+                reset_window(&mut classifier, &mut emitted_labels);
+            }
+        }
+    }
+    panic!("DHT sampling worker stopped");
+}
+
+struct InferenceSample {
+    discontinuity: bool,
+    timestamp: u64,
+    ready_epoch_us: u64,
+    value: Result<(f32, &'static str), &'static str>,
+}
+
+fn sample_sensors(
+    publisher: Arc<mqtt::Publisher>,
+    samples: mpsc::SyncSender<InferenceSample>,
+    cadence: u64,
+) {
+    unsafe {
+        let priority = esp_idf_svc::sys::uxTaskPriorityGet(std::ptr::null_mut());
+        esp_idf_svc::sys::vTaskPrioritySet(std::ptr::null_mut(), priority + 1);
+    }
+    let dht_pin = unsafe { esp_idf_hal::gpio::AnyIOPin::new(config::DHT_PIN) };
+    let mut normal_dht_sensor = dht::Dht11Sensor::new(dht_pin);
+    let mut fault_dht_sensor = if config::FAULT_CONFIG.uses_fault_read_pin(config::DHT_PIN) {
+        Some(dht::Dht11Sensor::new(unsafe {
+            esp_idf_hal::gpio::AnyIOPin::new(config::FAULT_CONFIG.read_pin)
+        }))
+    } else {
+        None
+    };
+    let mut fault_injector = if config::FAULT_CONFIG.mode.is_software_injected() {
+        Some(fault::FaultInjector::new(config::FAULT_CONFIG))
+    } else {
+        None
+    };
+
+    let topic = format!("{}{}", config::MQTT_TOPIC_PREFIX, config::DEVICE_ID);
+    let raw_cadence = config::SEND_INTERVAL_SECS;
+    let mut next_slot = (timestamp_epoch() / raw_cadence + 1) * raw_cadence;
+    let mut buckets = resampling::MinuteBuckets::new(timestamp_epoch(), cadence);
+    let mut previous_raw_slot = None;
+    let mut discontinuity = false;
+    info!(
+        "[DHT] raw_cadence_seconds={} inference_cadence_seconds={} aligned_epoch_slots=true",
+        raw_cadence, cadence
+    );
+    loop {
+        let sample_timestamp = wait_for_slot(&mut next_slot, raw_cadence);
+        if previous_raw_slot.is_some_and(|previous| sample_timestamp <= previous) {
+            buckets = resampling::MinuteBuckets::new(sample_timestamp, cadence);
+            discontinuity = true;
+        }
+        previous_raw_slot = Some(sample_timestamp);
+        if let Some(bucket) = buckets.close(timestamp_epoch()) {
+            let ready_epoch_us = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_micros() as u64;
+            let value = bucket
+                .temperature
+                .map(|temperature| {
+                    let (temperature, label) = match fault_injector.as_mut() {
+                        Some(injector) => {
+                            let injected = injector.apply(temperature);
+                            (injected, injector.emitted_mode().as_str())
+                        }
+                        None => (temperature, "normal"),
+                    };
+                    publish_json(
+                        &publisher,
+                        &topic,
+                        serde_json::json!({
+                            "device_id": config::DEVICE_ID,
+                            "timestamp": bucket.timestamp,
+                            "bucket_end_timestamp": bucket.timestamp + cadence,
+                            "ready_timestamp_us": ready_epoch_us,
+                            "valid_readings": bucket.count,
+                            "temperature": temperature,
+                            "base_temperature": bucket.temperature,
+                            "type": "minute_sample",
+                            "path": if fault_injector.is_some() { "fault" } else { "normal" },
+                            "fault_mode": label,
+                            "source": "minute_mean",
+                        }),
+                    );
+                    (temperature, label)
+                })
+                .ok_or("sample_minute_empty");
+            match samples.try_send(InferenceSample {
+                discontinuity,
+                timestamp: bucket.timestamp,
+                ready_epoch_us,
+                value,
+            }) {
+                Ok(()) => discontinuity = false,
+                Err(mpsc::TrySendError::Full(_)) => {
+                    log::warn!(
+                        "[INFERENCE] sample queue full; dropping minute {}",
+                        bucket.timestamp
+                    );
+                }
+                Err(mpsc::TrySendError::Disconnected(_)) => panic!("Inference consumer stopped"),
+            }
+        }
+        let sample_started = Instant::now();
+        let reading = normal_dht_sensor.read(true);
+        let ready_epoch_us = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_micros() as u64;
+        match reading {
+            Ok(reading) => {
+                let valid = ready_epoch_us >= sample_timestamp * 1_000_000
+                    && ready_epoch_us <= (sample_timestamp + 2) * 1_000_000
+                    && sample_started.elapsed() <= Duration::from_secs(2)
+                    && reading.temperature.is_finite();
+                if valid {
+                    buckets.add(sample_timestamp, reading.temperature);
+                }
                 let payload = serde_json::json!({
                     "device_id": config::DEVICE_ID,
                     "timestamp": sample_timestamp,
                     "temperature": reading.temperature,
                     "humidity": reading.humidity,
+                    "acquired_timestamp_us": ready_epoch_us,
+                    "sample_slot_valid": valid,
                     "path": "normal",
                     "fault_mode": "normal",
                     "gpio": config::DHT_PIN,
@@ -210,45 +308,15 @@ fn main() {
                     payload
                 );
                 publish_json(&publisher, &topic, payload);
-
-                if let Some((faulted_temperature, fault_mode)) = injected {
-                    let payload = serde_json::json!({
-                        "device_id": config::DEVICE_ID,
-                        "timestamp": sample_timestamp,
-                        "temperature": faulted_temperature,
-                        "humidity": reading.humidity,
-                        "path": "fault",
-                        "fault_mode": fault_mode.as_str(),
-                        "gpio": config::FAULT_CONFIG.read_pin,
-                        "source": "software",
-                    });
-                    info!(
-                        "[DHT] path=fault fault={} source=software temperature={:.1}°C (base {:.1}°C) payload={}",
-                        fault_mode.as_str(),
-                        faulted_temperature,
-                        reading.temperature,
-                        payload
-                    );
-                    publish_json(&publisher, &topic, payload);
-                }
             }
-            Err(e) => {
-                telemetry.sample_resets += 1;
-                telemetry.status(
-                    &publisher,
-                    classifier.as_ref(),
-                    sample_timestamp,
-                    "sample_read_failed",
-                );
-                reset_window(&mut classifier, &mut emitted_labels);
+            Err(error) => {
                 log::warn!(
                     "[DHT] path=normal gpio={} read failed: {:?}, skipping",
                     config::DHT_PIN,
-                    e
+                    error
                 );
             }
         }
-
         if let Some(sensor) = fault_dht_sensor.as_mut() {
             let sample_timestamp = timestamp_epoch();
             match sensor.read(config::FAULT_CONFIG.checksum_enabled()) {
@@ -302,7 +370,7 @@ fn wait_for_slot(next_slot: &mut u64, cadence: u64) -> u64 {
         if now < target && target - now > Duration::from_secs(cadence) {
             *next_slot = (now.as_secs() / cadence + 1) * cadence;
         } else if now < target {
-            thread::sleep((target - now).min(Duration::from_millis(200)));
+            esp_idf_hal::delay::FreeRtos::delay_ms((target - now).as_millis().clamp(1, 200) as u32);
         } else if now - target > Duration::from_secs(2) {
             *next_slot = (now.as_secs() / cadence + 1) * cadence;
         } else {
@@ -322,15 +390,59 @@ fn run_diagnosis_cycle(
     publisher: &mqtt::Publisher,
     topic: &str,
     window_id: u64,
+    window_ready_epoch_us: u64,
     emitted_labels: &VecDeque<&str>,
     telemetry: &mut telemetry::Telemetry,
 ) {
-    let window_ready_epoch_us = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_micros() as u64;
     let cycle_started = Instant::now();
     telemetry.cycles_attempted += 1;
+    let age_us = window_id
+        .checked_add(classifier.sample_interval_secs())
+        .and_then(|close| close.checked_mul(1_000_000))
+        .and_then(|close| {
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .ok()
+                .and_then(|now| u64::try_from(now.as_micros()).ok())
+                .and_then(|now| now.checked_sub(close))
+        });
+    let Some(age_us) = age_us else {
+        log::warn!(
+            "[EXCHANGE] window={} invalid epoch or clock before nominal bucket close",
+            window_id
+        );
+        exchange::invalidate_cache();
+        return;
+    };
+    let age = Duration::from_micros(age_us);
+    let deadline =
+        cycle_started + Duration::from_millis(config::EXCHANGE_CUTOFF_MS).saturating_sub(age);
+    let cycle_deadline =
+        cycle_started + Duration::from_millis(config::CYCLE_BUDGET_MS).saturating_sub(age);
+    let receive_deadline = deadline
+        .checked_sub(Duration::from_millis(100))
+        .unwrap_or(cycle_started);
+    exchange::prepare_window(window_id, deadline);
+    log::info!(
+        "[EXCHANGE] window={} nominal_close_age_ms={} cutoff_remaining_ms={} cycle_remaining_ms={}",
+        window_id,
+        age.as_millis(),
+        deadline
+            .saturating_duration_since(cycle_started)
+            .as_millis(),
+        cycle_deadline
+            .saturating_duration_since(cycle_started)
+            .as_millis()
+    );
+    if Instant::now() >= deadline {
+        log::warn!(
+            "[EXCHANGE] window={} missed exchange admission deadline",
+            window_id
+        );
+        exchange::invalidate_cache();
+        return;
+    }
+
     let available = espnow::registered_peer_mask();
     for (neighbor, available) in available.iter().enumerate() {
         if let Err(error) = classifier.set_neighbor_available(neighbor, *available) {
@@ -416,6 +528,7 @@ fn run_diagnosis_cycle(
             .send(espnow::EspNowJob {
                 target: config::NEIGHBORS[neighbor].mac,
                 payload,
+                deadline,
             })
             .is_err()
         {
@@ -427,9 +540,11 @@ fn run_diagnosis_cycle(
     }
 
     let mut slots = classifier.slots();
-    let deadline = Instant::now() + Duration::from_millis(config::EXCHANGE_WAIT_MS);
-    while outstanding > 0 && Instant::now() < deadline {
-        thread::sleep(Duration::from_millis(config::EXCHANGE_POLL_MS));
+    while outstanding > 0 && Instant::now() < receive_deadline {
+        esp_idf_hal::delay::FreeRtos::delay_ms(config::EXCHANGE_POLL_MS as u32);
+        if Instant::now() >= deadline {
+            break;
+        }
         for response in exchange::take_responses() {
             if response.window_id != window_id || response.request_nonce != request_nonce {
                 continue;
@@ -463,7 +578,25 @@ fn run_diagnosis_cycle(
     }
 
     exchange::end_response_cycle();
+    log::info!(
+        "[EXCHANGE] window={} outstanding={} cutoff_reached={} final_remaining_ms={}",
+        window_id,
+        outstanding,
+        Instant::now() >= deadline,
+        cycle_deadline
+            .saturating_duration_since(Instant::now())
+            .as_millis()
+    );
     let exchange_wait_us = exchange_started.elapsed().as_micros() as u64;
+    if cycle_deadline.saturating_duration_since(Instant::now())
+        < Duration::from_millis(config::CYCLE_BUDGET_MS - config::EXCHANGE_CUTOFF_MS)
+    {
+        log::warn!(
+            "[INFERENCE] window={} insufficient final-pass reserve",
+            window_id
+        );
+        return;
+    }
     let aggregate_started = Instant::now();
     let aggregate_pass = match classifier.predict(Some(&slots)) {
         Ok(pass) => pass,
@@ -491,6 +624,13 @@ fn run_diagnosis_cycle(
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_micros() as u64;
+    if Instant::now() >= cycle_deadline {
+        log::warn!(
+            "[INFERENCE] window={} final pass exceeded cycle deadline; result discarded",
+            window_id
+        );
+        return;
+    }
     telemetry.cycles_completed += 1;
     let payload_bytes_per_message =
         (classifier.hidden_size() + classifier.features_per_node()) * std::mem::size_of::<f32>();

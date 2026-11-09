@@ -29,6 +29,7 @@ struct SharedState {
 struct HiddenCache {
     window_id: u64,
     ready: bool,
+    deadline: Option<Instant>,
     hidden: Vec<f32>,
     features: Vec<f32>,
 }
@@ -41,7 +42,7 @@ struct Inbox {
 
 struct PendingRequest {
     request: Request,
-    received_at: Instant,
+    deadline: Instant,
 }
 
 static STATE: OnceLock<SharedState> = OnceLock::new();
@@ -94,6 +95,7 @@ pub fn init(
             cache: Mutex::new(HiddenCache {
                 window_id: 0,
                 ready: false,
+                deadline: None,
                 hidden: vec![0.0; window_size * hidden_size],
                 features: vec![0.0; window_size * features_per_node],
             }),
@@ -111,6 +113,9 @@ fn state() -> Option<&'static SharedState> {
 }
 
 pub fn handle_frame(data: &[u8]) {
+    let Some(deadline) = transport_deadline().filter(|deadline| Instant::now() < *deadline) else {
+        return;
+    };
     if let Some(request) = decode_request(data) {
         info!(
             "[EXCHANGE] request from {} for window {} on {} timesteps",
@@ -121,9 +126,9 @@ pub fn handle_frame(data: &[u8]) {
         if let Some(state) = state()
             && let Ok(mut inbox) = state.inbox.lock()
         {
-            inbox.requests.retain(|pending| {
-                pending.received_at.elapsed() < Duration::from_millis(config::EXCHANGE_WAIT_MS)
-            });
+            inbox
+                .requests
+                .retain(|pending| Instant::now() < pending.deadline);
             let duplicate = inbox.requests.iter().any(|pending| {
                 pending.request.requester == request.requester
                     && pending.request.window_id == request.window_id
@@ -132,7 +137,8 @@ pub fn handle_frame(data: &[u8]) {
             if !duplicate && inbox.requests.len() < MAX_INBOX_REQUESTS {
                 inbox.requests.push_back(PendingRequest {
                     request,
-                    received_at: Instant::now(),
+                    deadline: deadline
+                        .min(Instant::now() + Duration::from_millis(config::EXCHANGE_CUTOFF_MS)),
                 });
             }
         }
@@ -161,6 +167,7 @@ pub fn invalidate_cache() {
     if let Some(state) = state() {
         if let Ok(mut cache) = state.cache.lock() {
             cache.ready = false;
+            cache.deadline = None;
         }
         if let Ok(mut inbox) = state.inbox.lock() {
             inbox.requests.clear();
@@ -168,6 +175,20 @@ pub fn invalidate_cache() {
             inbox.active_response = None;
         }
     }
+}
+
+pub fn prepare_window(window_id: u64, deadline: Instant) {
+    if let Some(state) = state()
+        && let Ok(mut cache) = state.cache.lock()
+    {
+        cache.ready = false;
+        cache.window_id = window_id;
+        cache.deadline = Some(deadline);
+    }
+}
+
+pub fn transport_deadline() -> Option<Instant> {
+    state()?.cache.lock().ok()?.deadline
 }
 
 pub fn update_cache(window_id: u64, hidden: &[f32], features: &[f32]) -> bool {
@@ -178,6 +199,13 @@ pub fn update_cache(window_id: u64, hidden: &[f32], features: &[f32]) -> bool {
         return false;
     };
     cache.ready = false;
+    if cache.window_id != window_id
+        || cache
+            .deadline
+            .is_none_or(|deadline| Instant::now() >= deadline)
+    {
+        return false;
+    }
     if !valid_window(window_id)
         || hidden.len() != cache.hidden.len()
         || features.len() != cache.features.len()
@@ -203,11 +231,14 @@ fn window_start(end: u64) -> u64 {
     end.saturating_sub((MAX_TIMESTEPS as u64 - 1) * SAMPLE_INTERVAL_SECS)
 }
 
-pub fn serve_pending_requests() -> Vec<(String, Vec<u8>)> {
+pub fn serve_pending_requests() -> Vec<(String, Vec<u8>, Instant)> {
     let Some(state) = state() else {
         return Vec::new();
     };
     let Ok(cache) = state.cache.lock() else {
+        return Vec::new();
+    };
+    let Some(deadline) = cache.deadline.filter(|deadline| Instant::now() < *deadline) else {
         return Vec::new();
     };
     let requests = {
@@ -217,7 +248,7 @@ pub fn serve_pending_requests() -> Vec<(String, Vec<u8>)> {
         let mut ready = Vec::new();
         inbox.requests.retain(|pending| {
             let request = &pending.request;
-            if pending.received_at.elapsed() >= Duration::from_millis(config::EXCHANGE_WAIT_MS)
+            if Instant::now() >= pending.deadline
                 || request.window_id < cache.window_id
                 || request.timesteps.is_empty()
             {
@@ -261,6 +292,7 @@ pub fn serve_pending_requests() -> Vec<(String, Vec<u8>)> {
                     &hidden,
                     &features,
                 ),
+                deadline,
             ))
         })
         .collect()

@@ -24,7 +24,7 @@ const MAX_PARTIAL_FRAMES: usize = 2;
 const RX_CAPACITY: usize = 64;
 const TX_CAPACITY: usize = 4;
 const MAX_PEERS: usize = 20;
-const REASSEMBLY_TIMEOUT: Duration = Duration::from_secs(2);
+const REASSEMBLY_TIMEOUT: Duration = Duration::from_secs(8);
 const SEND_TIMEOUT: Duration = Duration::from_millis(500);
 
 type Mac = [u8; 6];
@@ -32,6 +32,7 @@ type Mac = [u8; 6];
 pub struct EspNowJob {
     pub target: Mac,
     pub payload: Vec<u8>,
+    pub deadline: Instant,
 }
 
 #[derive(Clone)]
@@ -39,7 +40,8 @@ pub struct EspNowSender(SyncSender<EspNowJob>);
 
 impl EspNowSender {
     pub fn send(&self, job: EspNowJob) -> Result<(), TrySendError<EspNowJob>> {
-        if !HEALTHY.load(Ordering::Acquire)
+        if Instant::now() >= job.deadline
+            || !HEALTHY.load(Ordering::Acquire)
             || job.payload.is_empty()
             || job.payload.len() > MAX_FRAME_BYTES
             || !registered(&job.target)
@@ -368,34 +370,37 @@ fn run(
     let mut next_frame_id: u16 = 0;
     let mut partials = HashMap::new();
     loop {
-        partials.retain(|_, partial: &mut PartialFrame| {
-            let keep = partial.started.elapsed() < REASSEMBLY_TIMEOUT;
-            if !keep {
-                RX_REASSEMBLY_EXPIRED.add(1);
-            }
-            keep
-        });
-        for (src, packet) in rx.try_iter().take(RX_CAPACITY) {
-            if let Some(frame) = reassemble(&mut partials, src, &packet) {
-                if accept_origin(&frame, src, own_mac) {
-                    exchange::handle_frame(&frame);
-                } else {
-                    RX_ORIGIN_DROPS.add(1);
-                }
-            }
-        }
+        service_rx(&rx, &mut partials, own_mac);
         if let Ok(job) = jobs.try_recv() {
             next_frame_id = next_frame_id.wrapping_add(1);
-            send_frame(&job.target, next_frame_id, &job.payload, &completions);
+            send_frame(
+                &job.target,
+                next_frame_id,
+                &job.payload,
+                job.deadline,
+                &completions,
+                &rx,
+                &mut partials,
+                own_mac,
+            );
         }
-        for (requester, payload) in exchange::serve_pending_requests() {
+        for (requester, payload, deadline) in exchange::serve_pending_requests() {
             if let Some((_, peer)) = config::NEIGHBORS.iter().enumerate().find(|(index, peer)| {
                 peer.device_id == requester
                     && configured_valid(*index, &own_mac)
                     && registered(&peer.mac)
             }) {
                 next_frame_id = next_frame_id.wrapping_add(1);
-                send_frame(&peer.mac, next_frame_id, &payload, &completions);
+                send_frame(
+                    &peer.mac,
+                    next_frame_id,
+                    &payload,
+                    deadline,
+                    &completions,
+                    &rx,
+                    &mut partials,
+                    own_mac,
+                );
             } else {
                 TX_RESPONSE_DROPS.add(1);
                 warn!(
@@ -408,6 +413,30 @@ fn run(
     }
 }
 
+fn service_rx(
+    rx: &Receiver<(Mac, Vec<u8>)>,
+    partials: &mut HashMap<(Mac, u16), PartialFrame>,
+    own_mac: Mac,
+) {
+    partials.retain(|_, partial: &mut PartialFrame| {
+        let keep = partial.started.elapsed() < REASSEMBLY_TIMEOUT
+            && exchange::transport_deadline().is_some_and(|deadline| Instant::now() < deadline);
+        if !keep {
+            RX_REASSEMBLY_EXPIRED.add(1);
+        }
+        keep
+    });
+    for (src, packet) in rx.try_iter().take(RX_CAPACITY) {
+        if let Some(frame) = reassemble(partials, src, &packet) {
+            if accept_origin(&frame, src, own_mac) {
+                exchange::handle_frame(&frame);
+            } else {
+                RX_ORIGIN_DROPS.add(1);
+            }
+        }
+    }
+}
+
 fn reassemble(
     partials: &mut HashMap<(Mac, u16), PartialFrame>,
     src: Mac,
@@ -417,6 +446,12 @@ fn reassemble(
         || packet[0..2] != FRAG_MAGIC
     {
         RX_MALFORMED_DROPS.add(1);
+        return None;
+    }
+    if !registered(&src)
+        || exchange::transport_deadline().is_none_or(|deadline| Instant::now() >= deadline)
+    {
+        RX_ORIGIN_DROPS.add(1);
         return None;
     }
     let frame_id = u16::from_le_bytes([packet[2], packet[3]]);
@@ -487,10 +522,23 @@ fn send_frame(
     target: &Mac,
     frame_id: u16,
     payload: &[u8],
+    deadline: Instant,
     completions: &Receiver<(Mac, bool)>,
+    rx: &Receiver<(Mac, Vec<u8>)>,
+    partials: &mut HashMap<(Mac, u16), PartialFrame>,
+    own_mac: Mac,
 ) -> bool {
     TX_FRAMES_ATTEMPTED.add(1);
-    let completed = send_frame_inner(target, frame_id, payload, completions);
+    let completed = send_frame_inner(
+        target,
+        frame_id,
+        payload,
+        deadline.min(Instant::now() + REASSEMBLY_TIMEOUT),
+        completions,
+        rx,
+        partials,
+        own_mac,
+    );
     if completed {
         TX_FRAMES_COMPLETED.add(1);
     } else {
@@ -503,9 +551,14 @@ fn send_frame_inner(
     target: &Mac,
     frame_id: u16,
     payload: &[u8],
+    deadline: Instant,
     completions: &Receiver<(Mac, bool)>,
+    rx: &Receiver<(Mac, Vec<u8>)>,
+    partials: &mut HashMap<(Mac, u16), PartialFrame>,
+    own_mac: Mac,
 ) -> bool {
-    if payload.is_empty()
+    if Instant::now() >= deadline
+        || payload.is_empty()
         || payload.len() > MAX_FRAME_BYTES
         || !registered(target)
         || !HEALTHY.load(Ordering::Acquire)
@@ -514,6 +567,14 @@ fn send_frame_inner(
     }
     let count = payload.len().div_ceil(FRAG_CHUNK_BYTES) as u8;
     for (index, chunk) in payload.chunks(FRAG_CHUNK_BYTES).enumerate() {
+        service_rx(rx, partials, own_mac);
+        if Instant::now() >= deadline {
+            warn!(
+                "[ESPNOW] frame={} deadline expired at fragment={}/{}",
+                frame_id, index, count
+            );
+            return false;
+        }
         let mut packet = [0; MAX_PACKET_BYTES];
         packet[..2].copy_from_slice(&FRAG_MAGIC);
         packet[2..4].copy_from_slice(&frame_id.to_le_bytes());
@@ -538,12 +599,25 @@ fn send_frame_inner(
         }
         TX_FRAGMENTS_ACCEPTED.add(1);
         TX_FRAGMENT_BYTES_ACCEPTED.add(bytes);
-        match completions.recv_timeout(SEND_TIMEOUT) {
-            Ok((mac, true)) if mac == *target => {
+        let completion_deadline = (Instant::now() + SEND_TIMEOUT).min(deadline);
+        let completion = loop {
+            service_rx(rx, partials, own_mac);
+            match completions.try_recv() {
+                Ok(value) => break Some(value),
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => break None,
+                Err(std::sync::mpsc::TryRecvError::Empty) => {}
+            }
+            if Instant::now() >= completion_deadline {
+                break None;
+            }
+            FreeRtos::delay_ms(1);
+        };
+        match completion {
+            Some((mac, true)) if mac == *target => {
                 TX_FRAGMENTS_COMPLETED.add(1);
                 TX_FRAGMENT_BYTES_COMPLETED.add(bytes);
             }
-            Ok((mac, false)) if mac == *target => {
+            Some((mac, false)) if mac == *target => {
                 TX_FRAGMENTS_FAILED.add(1);
                 TX_FRAGMENTS_DELIVERY_FAILED.add(1);
                 warn!("[ESPNOW] delivery failed for {:02X?}", target);
