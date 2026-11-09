@@ -63,6 +63,19 @@ Export targets:
 - `node` (default): one graph receiver with its sender list; pass the device's graph index as `--receiver-index` and list the same senders in `NEIGHBORS` in `sender_indices` order.
 - `local` and `graph` are rejected by the current firmware exporter: their probability-output wrappers do not satisfy the v3 distributed raw-logit/CRF contract.
 
+## Common stage runtime and HiFiNet boundary
+
+`components/tflite_micro` is the model-neutral TFLite Micro bridge used by CESTA through `src/tflite.rs`. Its 35-operator resolver includes `MEAN`, `RSQRT`, and `SQUARED_DIFFERENCE` for exported HiFiNet stages. It verifies the FlatBuffer and schema and requires one float32 input and output, each shaped `[1, 60, width]`.
+
+- `StageRunner::new(arena_size)` creates an unloaded runner.
+- `load(model_bytes, input_width, output_width)` destroys the previous interpreter, arena, and model copy before allocating the next stage and checks tensor widths. Failed loads leave the runner unloaded.
+- `predict(input, output)` uses flattened caller-owned buffers, checks lengths and finite values, and copies the result out before a stage change.
+- `unload()` and `Drop` release resources. Models are copied into aligned PSRAM, so source bytes need not outlive `load`. Allocation failures return errors.
+
+Reuse one runner across sequential stages: it owns at most one interpreter and arena plus one model copy, not five arenas. Tensor allocation retains idle-priority scheduling; operator profiling yields periodically during invocation. The C API exports `tflite_micro_create`, `tflite_micro_destroy`, `tflite_micro_last_error`, `tflite_micro_input_count`, `tflite_micro_output_count`, and `tflite_micro_predict`. A creation error may return a handle that still requires destruction. CESTA retains its existing packed inputs, outputs, request logic, and CRF decoding.
+
+This delivers **stage execution**, not a distributed HiFiNet application. The host bundle `runs/hifinet-relocation-export-seed12-20261109T2106Z/bundle` contains 14 stages totaling 846,724 model bytes. Each node needs one temporal stage, its three receiver-specific graph stages, and the classifier, with no CRF. The application still embeds only CESTA. HiFiNet bundle installation/selection, manifest/topology validation, round-specific packing, multi-round radio synchronization, classifier decoding, and on-device numerical/memory/timing validation remain required. Do not install a single stage as the CESTA node model or interpret a successful build as full HiFiNet deployment support.
+
 ## Build and flash
 
 ```bash

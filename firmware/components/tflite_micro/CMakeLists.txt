@@ -1,5 +1,5 @@
 idf_component_register(
-    SRCS "cesta_tflite.cpp"
+    SRCS "tflite_micro.cpp"
     INCLUDE_DIRS "include"
     REQUIRES esp-tflite-micro
 )

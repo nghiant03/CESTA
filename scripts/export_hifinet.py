@@ -53,7 +53,7 @@ def main() -> int:
             original = litert_torch.convert(stage, (example,)).model_content()
             content, splits = split_large_concatenations(original)
             operators, input_shape, output_shape = inspect_model(content)
-            if operators - (SUPPORTED_OPERATORS | {"MEAN", "RSQRT", "SQUARED_DIFFERENCE"}):
+            if operators - SUPPORTED_OPERATORS:
                 raise ValueError(f"{name}: operators absent from the current Micro resolver: {sorted(operators - SUPPORTED_OPERATORS)}")
             if input_shape != list(example.shape) or output_shape != [1, WINDOW_SIZE, stage.output_width]:
                 raise ValueError(f"{name}: unexpected stage shapes {input_shape}, {output_shape}")

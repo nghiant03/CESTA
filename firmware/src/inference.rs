@@ -1,7 +1,6 @@
 //! Distributed node inference through the exported TFLite artifact.
 
-use std::ffi::{CStr, c_char, c_int, c_uchar, c_void};
-use std::ptr::NonNull;
+use crate::tflite::StageRunner;
 use std::time::Instant;
 
 const WINDOW_SIZE: usize = 60;
@@ -11,25 +10,8 @@ const CLASS_NAMES: [&str; CLASS_COUNT] = ["NORMAL", "SPIKE", "DRIFT", "STUCK"];
 static MODEL_DATA: &[u8] = include_bytes!("../model/model.tflite");
 static MODEL_METADATA: &str = include_str!("../model/model.json");
 
-unsafe extern "C" {
-    fn cesta_tflite_create(
-        model_data: *const c_uchar,
-        model_size: usize,
-        tensor_arena_size: usize,
-    ) -> *mut c_void;
-    fn cesta_tflite_destroy(classifier: *mut c_void);
-    fn cesta_tflite_last_error(classifier: *const c_void) -> *const c_char;
-    fn cesta_tflite_predict(
-        classifier: *mut c_void,
-        input: *const f32,
-        input_count: usize,
-        output: *mut f32,
-        output_count: usize,
-    ) -> c_int;
-}
-
 pub struct NodeClassifier {
-    inner: NonNull<c_void>,
+    runner: StageRunner,
     receiver_index: usize,
     hidden_size: usize,
     features_per_node: usize,
@@ -66,21 +48,10 @@ impl NodeClassifier {
             sample_interval_secs,
             model_fingerprint,
         ) = parse_metadata(receiver_index, sender_indices)?;
-        let inner = unsafe {
-            cesta_tflite_create(MODEL_DATA.as_ptr(), MODEL_DATA.len(), tensor_arena_size)
-        };
-        let inner = NonNull::new(inner)
-            .ok_or_else(|| "failed to allocate TensorFlow Lite classifier".to_owned())?;
-        let error = unsafe { cesta_tflite_last_error(inner.as_ptr()) };
-        if !error.is_null() {
-            let message = unsafe { CStr::from_ptr(error) }
-                .to_string_lossy()
-                .into_owned();
-            unsafe { cesta_tflite_destroy(inner.as_ptr()) };
-            return Err(message);
-        }
+        let mut runner = StageRunner::new(tensor_arena_size)?;
+        runner.load(MODEL_DATA, input_width, output_width)?;
         Ok(Self {
-            inner,
+            runner,
             receiver_index,
             hidden_size,
             features_per_node,
@@ -205,29 +176,7 @@ impl NodeClassifier {
             }
         }
         self.build_input(slots);
-        let status = unsafe {
-            cesta_tflite_predict(
-                self.inner.as_ptr(),
-                self.input.as_ptr(),
-                self.input.len(),
-                self.output.as_mut_ptr(),
-                self.output.len(),
-            )
-        };
-        if status != 0 {
-            let error = unsafe { cesta_tflite_last_error(self.inner.as_ptr()) };
-            return Err(if error.is_null() {
-                "TensorFlow Lite inference failed".to_owned()
-            } else {
-                unsafe { CStr::from_ptr(error) }
-                    .to_string_lossy()
-                    .into_owned()
-            });
-        }
-
-        if self.output.iter().any(|value| !value.is_finite()) {
-            return Err("model returned nonfinite output".to_owned());
-        }
+        self.runner.predict(&self.input, &mut self.output)?;
         let mut pass = NodePass {
             logits: vec![0.0; WINDOW_SIZE * CLASS_COUNT],
             decoded: Vec::new(),
@@ -322,12 +271,6 @@ impl NodeClassifier {
                 };
             }
         }
-    }
-}
-
-impl Drop for NodeClassifier {
-    fn drop(&mut self) {
-        unsafe { cesta_tflite_destroy(self.inner.as_ptr()) };
     }
 }
 

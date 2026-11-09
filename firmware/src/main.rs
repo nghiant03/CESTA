@@ -10,6 +10,7 @@ mod inference;
 mod mqtt;
 mod resampling;
 mod telemetry;
+mod tflite;
 mod wifi;
 
 use std::collections::VecDeque;
