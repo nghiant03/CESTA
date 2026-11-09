@@ -11,7 +11,7 @@ from export_cesta_firmware import SUPPORTED_OPERATORS, WINDOW_SIZE, inspect_mode
 from CESTA.artifacts import load_checkpoint_metadata, load_checkpoint_weights
 from CESTA.batch import GraphWindowBatch
 from CESTA.models.spatial.hifinet import HiFiNetClassifier
-from CESTA.models.spatial.hifinet_deployment import HiFiNetClassifierStage, HiFiNetGraphStage, HiFiNetTemporalStage
+from CESTA.models.spatial.hifinet.deployment import HiFiNetClassifierStage, HiFiNetGraphStage, HiFiNetTemporalStage
 
 
 def main() -> int:
