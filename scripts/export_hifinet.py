@@ -15,14 +15,11 @@ from CESTA.models.spatial.hifinet.deployment import HiFiNetClassifierStage, HiFi
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Export and validate staged HiFiNet host artifacts; not installable ESP32 firmware.")
+    parser = argparse.ArgumentParser(description="Export parity-validated HiFiNet stages for host inference and firmware bundle installation.")
     parser.add_argument("--model", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--validate-only", action="store_true", help="Validate PyTorch stages without converting to TFLite")
     args = parser.parse_args()
-    firmware = Path(__file__).resolve().parents[1] / "firmware"
-    if args.output.resolve().is_relative_to(firmware):
-        raise ValueError("HiFiNet stages cannot be installed in the CESTA firmware tree")
     if args.output.exists() and any(args.output.iterdir()):
         raise ValueError("output directory must be empty to avoid mixing stage bundles")
     metadata = load_checkpoint_metadata(args.model)
