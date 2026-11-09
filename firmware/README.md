@@ -63,6 +63,19 @@ Export targets:
 - `node` (default): one graph receiver with its sender list; pass the device's graph index as `--receiver-index` and list the same senders in `NEIGHBORS` in `sender_indices` order.
 - `local` and `graph` are rejected by the current firmware exporter: their probability-output wrappers do not satisfy the v3 distributed raw-logit/CRF contract.
 
+## Model source layout
+
+`src/models/mod.rs` selects the model using the `hifinet` configuration emitted by `build.rs` for `FIRMWARE_MODEL=hifinet`; unset or `cesta` selects CESTA. It reexports the selected inference and exchange modules, with root aliases preserving shared callers' `crate::inference` and `crate::exchange` paths.
+
+| Path | Responsibility |
+|---|---|
+| `src/models/cesta/` | `mod.rs`, CESTA `inference.rs`, version-3 `exchange.rs`, and synthetic `diagnostic.rs` |
+| `src/models/hifinet/` | `mod.rs`, HiFiNet `inference.rs`, and version-4 `exchange.rs` |
+| `src/tflite.rs`, `components/tflite_micro/` | Shared stage execution and native bridge |
+| Remaining `src/` modules | Shared device configuration, sensor sampling/resampling, fault injection, ESP-NOW transport, MQTT, telemetry, and application orchestration |
+
+Only the selected model's modules compile; synthetic diagnostics are CESTA-only. CESTA artifacts remain in `model/model.tflite` and `model/model.json`. HiFiNet stages remain in the installed bundle selected by `HIFINET_BUNDLE`; moving source modules does not require reexporting or relocating either model's artifacts.
+
 ## Common stage runtime and HiFiNet application
 
 `components/tflite_micro` is the model-neutral TFLite Micro bridge used by CESTA through `src/tflite.rs`. Its 35-operator resolver includes `MEAN`, `RSQRT`, and `SQUARED_DIFFERENCE` for exported HiFiNet stages. It verifies the FlatBuffer and schema and requires one float32 input and output, each shaped `[1, 60, width]`.
@@ -74,7 +87,7 @@ Export targets:
 
 Reuse one runner across sequential stages: it owns at most one interpreter and arena plus one model copy, not five arenas. Tensor allocation retains idle-priority scheduling; operator profiling yields periodically during invocation. The C API exports `tflite_micro_create`, `tflite_micro_destroy`, `tflite_micro_last_error`, `tflite_micro_input_count`, `tflite_micro_output_count`, and `tflite_micro_predict`. A creation error may return a handle that still requires destruction. CESTA retains its existing packed inputs, outputs, request logic, and CRF decoding.
 
-HiFiNet is selected at build time; the default remains CESTA. `src/hifinet.rs` runs temporal → graph 0 → graph 1 → graph 2 → classifier through one runner, retains the original temporal embedding for the classifier, and decodes each timestep by first-index argmax without CRF. Raw temperature windows are never standardized. Exported graph stages include the always-available self loop; absent remote payloads are zero-filled and masked.
+HiFiNet is selected at build time; the default remains CESTA. `src/models/hifinet/inference.rs` runs temporal → graph 0 → graph 1 → graph 2 → classifier through one runner, retains the original temporal embedding for the classifier, and decodes each timestep by first-index argmax without CRF. Raw temperature windows are never standardized. Exported graph stages include the always-available self loop; absent remote payloads are zero-filled and masked.
 
 ```bash
 # From repository root; optional copied installation into an empty directory

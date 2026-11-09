@@ -2,20 +2,9 @@
 
 mod config;
 mod dht;
-#[cfg(not(hifinet))]
-mod diagnostic;
 mod espnow;
-#[cfg(not(hifinet))]
-mod exchange;
-#[cfg(hifinet)]
-#[path = "hifinet_exchange.rs"]
-mod exchange;
 mod fault;
-#[cfg(not(hifinet))]
-mod inference;
-#[cfg(hifinet)]
-#[path = "hifinet.rs"]
-mod inference;
+mod models;
 mod mqtt;
 mod resampling;
 mod telemetry;
@@ -29,6 +18,10 @@ use std::time::{Duration, Instant};
 
 use esp_idf_svc::sntp::{EspSntp, OperatingMode, SntpConf, SyncMode, SyncStatus};
 use log::info;
+
+#[cfg(not(hifinet))]
+use models::diagnostic;
+use models::{exchange, inference};
 
 use crate::inference::NodeClassifier;
 use crate::mqtt::PublishJob;

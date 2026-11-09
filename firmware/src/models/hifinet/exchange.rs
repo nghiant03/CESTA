@@ -193,7 +193,7 @@ pub fn update_round(window_id: u64, round: usize, hidden: &[f32]) -> bool {
         || cache.window_id != window_id
         || !valid_window(window_id)
         || cache.deadline.is_none_or(|d| Instant::now() >= d)
-        || hidden.len() != MAX_TIMESTEPS * crate::inference::WIDTHS[round]
+        || hidden.len() != MAX_TIMESTEPS * super::inference::WIDTHS[round]
         || hidden.iter().any(|v| !v.is_finite())
     {
         return false;
@@ -257,7 +257,7 @@ pub fn serve_pending_requests() -> Vec<(String, Vec<u8>, Instant)> {
                 return None;
             }
             let r = round(request.request_nonce)?;
-            let width = crate::inference::WIDTHS[r];
+            let width = super::inference::WIDTHS[r];
             let source = cache.rounds[r].as_ref()?;
             let mut hidden = Vec::with_capacity(request.timesteps.len() * width);
             for timestep in &request.timesteps {
@@ -452,7 +452,7 @@ fn decode_response(data: &[u8]) -> Option<Response> {
     let request_nonce = read_u64(data, offset)?;
     let r = round(request_nonce)?;
     let timesteps = read_timesteps(data, offset)?;
-    let hidden = read_f32s(data, offset, timesteps.len() * crate::inference::WIDTHS[r])?;
+    let hidden = read_f32s(data, offset, timesteps.len() * super::inference::WIDTHS[r])?;
     if *offset != data.len() {
         return None;
     }

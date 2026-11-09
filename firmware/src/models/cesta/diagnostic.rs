@@ -3,8 +3,8 @@
 use std::thread;
 use std::time::Duration;
 
+use super::inference::{NodeClassifier, NodePass};
 use crate::config;
-use crate::inference::{NodeClassifier, NodePass};
 
 pub fn run() -> ! {
     log::warn!(

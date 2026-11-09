@@ -109,6 +109,12 @@ All alternative backends are opt-in and rejected by firmware export. Preserve de
 
 Retain tracked experiment files only when they support the paper's Intel results, planned DHT accuracy/macro-F1 comparison, or their reproducibility dependencies. The retained `cesta-dht-gru-control.yaml` and `cesta-window-standardization.yaml` support the DHT training lineage and shared runner. Alternative-backend implementation contracts above remain relevant to checkpoint compatibility, but unrelated experiment recipes and diagnostic results are not maintained here. Do not delete untracked or ignored run artifacts during tracked-file cleanup.
 
+### Firmware model boundaries
+
+- `firmware/src/models/mod.rs` selects and reexports the build-time model's inference and exchange modules; root aliases preserve `crate::inference` and `crate::exchange` for shared callers.
+- Keep CESTA inference, exchange, and synthetic diagnostics in `firmware/src/models/cesta/`; keep HiFiNet inference and exchange in `firmware/src/models/hifinet/`. Only CESTA builds include synthetic diagnostics. Model-internal dependencies use sibling modules.
+- Keep TFLite stage execution, ESP-NOW transport, sampling/resampling, fault injection, MQTT, telemetry, and device configuration shared outside `models/`. Model grouping must not change artifact locations, wire protocols, preprocessing, or decoding.
+
 ### HiFiNet firmware
 
 - Select HiFiNet with build-time `FIRMWARE_MODEL=hifinet`, an absolute `HIFINET_BUNDLE`, and `HIFINET_RECEIVER`; default CESTA remains independent. Validate the complete bundle before embedding receiver-specific stages.

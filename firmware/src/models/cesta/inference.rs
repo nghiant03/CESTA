@@ -7,8 +7,8 @@ const WINDOW_SIZE: usize = 60;
 const CLASS_COUNT: usize = 4;
 const CLASS_NAMES: [&str; CLASS_COUNT] = ["NORMAL", "SPIKE", "DRIFT", "STUCK"];
 
-static MODEL_DATA: &[u8] = include_bytes!("../model/model.tflite");
-static MODEL_METADATA: &str = include_str!("../model/model.json");
+static MODEL_DATA: &[u8] = include_bytes!("../../../model/model.tflite");
+static MODEL_METADATA: &str = include_str!("../../../model/model.json");
 
 pub struct NodeClassifier {
     runner: StageRunner,

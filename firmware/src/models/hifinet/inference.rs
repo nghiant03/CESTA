@@ -1,4 +1,5 @@
-use crate::{config, espnow, exchange, mqtt, telemetry, tflite::StageRunner};
+use super::exchange;
+use crate::{config, espnow, mqtt, telemetry, tflite::StageRunner};
 use std::{
     collections::VecDeque,
     time::{Duration, Instant},
