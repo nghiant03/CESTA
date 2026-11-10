@@ -19,7 +19,7 @@ use std::time::{Duration, Instant};
 use esp_idf_svc::sntp::{EspSntp, OperatingMode, SntpConf, SyncMode, SyncStatus};
 use log::info;
 
-#[cfg(not(hifinet))]
+#[cfg(not(any(hifinet, stgcn)))]
 use models::diagnostic;
 use models::{exchange, inference};
 
@@ -30,7 +30,7 @@ fn main() {
     esp_idf_svc::sys::link_patches();
     esp_idf_svc::log::EspLogger::initialize_default();
 
-    #[cfg(not(hifinet))]
+    #[cfg(not(any(hifinet, stgcn)))]
     if config::INFERENCE_SYNTHETIC_DIAGNOSTIC {
         diagnostic::run();
     }
@@ -388,7 +388,7 @@ fn wait_for_slot(next_slot: &mut u64, cadence: u64) -> u64 {
 /// One distributed CESTA diagnosis cycle: receiver-local request pass, neighbor
 /// exchange over ESP-NOW, aggregate pass with received payloads, and a
 /// diagnosis telemetry message.
-#[cfg(not(hifinet))]
+#[cfg(not(any(hifinet, stgcn)))]
 fn run_diagnosis_cycle(
     classifier: &mut NodeClassifier,
     espnow: &espnow::EspNowSender,
@@ -800,7 +800,7 @@ fn timestamp_epoch() -> u64 {
         .unwrap_or(0)
 }
 
-#[cfg(hifinet)]
+#[cfg(any(hifinet, stgcn))]
 fn run_diagnosis_cycle(
     classifier: &mut NodeClassifier,
     radio: &espnow::EspNowSender,

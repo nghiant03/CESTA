@@ -422,7 +422,7 @@ fn parse_metadata(receiver_index: usize, sender_indices: &[usize]) -> Result<Met
         return Err("firmware model must be exported from a trained CESTA checkpoint".to_owned());
     }
     if metadata.get("target").and_then(serde_json::Value::as_str) != Some("node") {
-        return Err("firmware requires a distributed node export: run scripts/export_cesta_firmware.py with --target node".to_owned());
+        return Err("firmware requires a distributed node export: run scripts/export_firmware.py with --target node".to_owned());
     }
     if json_u64(&metadata, "window_size")? as usize != WINDOW_SIZE {
         return Err("firmware only supports 60-sample windows".to_owned());
