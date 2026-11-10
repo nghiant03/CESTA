@@ -53,12 +53,18 @@ Export a trained checkpoint before flashing. The exporter checks numerical parit
 uv run --isolated \
   --with 'litert-torch==0.9.4' --with tflite --with 'pydantic<2.12' \
   --with pyyaml --with loguru --with dulwich --with numpy \
-  python scripts/export_cesta_firmware.py \
-  --model runs/cesta/<run_id> --output firmware/model \
+  python scripts/export_firmware.py \
+  --model runs/cesta/<run_id> --output runs/cesta-export/bundle \
   --target node --receiver-index <node_index>
 ```
 
-Export targets:
+All exports use `bundle.json` and a `stages` table recording each FlatBuffer's filename, hash, length, shapes and operators. CESTA has one `node.tflite` stage; HiFiNet has `temporal.tflite`, `graph-<round>-node-<receiver>.tflite`, and `classifier.tflite`; STGCN has `prepare-<round>.tflite`, `graph-<round>-node-<receiver>.tflite`, `finish-<round>.tflite`, and `classifier.tflite`. Different stage counts and widths are architectural, not alternate bundle conventions.
+
+Use `uv run --no-project --with tflite==2.18.0 python scripts/install_firmware.py --bundle <bundle> --architecture <model> --output <empty-directory>`. For CESTA, installation maps `bundle.json` to firmware-required `model.json` and `node.tflite` to `model.tflite`. Stage models copy the bundle unchanged. Installation refuses nonempty destinations; back up an existing CESTA model directory outside the destination before replacing it. No existing ignored artifacts are migrated automatically. Legacy CESTA `model.json`/`model.tflite` pairs are accepted with structural validation but cannot prove a historical model hash absent from their metadata. Existing staged v1 bundles remain supported. Existing boards and radio fingerprints are unchanged for identical contracts and model bytes; different checkpoints or stage bytes still require matching fleet deployments. The removed per-model command names are not retained as wrappers.
+
+The same entrypoint detects HiFiNet and STGCN from `--model` checkpoint metadata. For these staged models, supply `--output <empty-bundle-directory>` and omit CESTA-only flags. `--architecture` optionally asserts the detected architecture. `--validate-only` runs staged PyTorch parity without conversion and does not create installable bundles. The per-model exporter and installer scripts have been removed; use only `export_firmware.py` and `install_firmware.py`.
+
+CESTA export targets:
 
 - `node` (default): one graph receiver with its sender list; pass the device's graph index as `--receiver-index` and list the same senders in `NEIGHBORS` in `sender_indices` order.
 - `local` and `graph` are rejected by the current firmware exporter: their probability-output wrappers do not satisfy the v3 distributed raw-logit/CRF contract.
@@ -91,9 +97,9 @@ HiFiNet is selected at build time; the default remains CESTA. `src/models/hifine
 
 ```bash
 # From repository root; optional copied installation into an empty directory
-uv run python scripts/install_hifinet.py \
+uv run --no-project --with tflite==2.18.0 python scripts/install_firmware.py \
   --bundle runs/hifinet-relocation-export-seed12-20261109T2106Z/bundle \
-  --output firmware/model/hifinet
+  --output runs/cesta-export/bundle/hifinet
 
 # From firmware; receiver must match config.rs NODE_INDEX and ordered NEIGHBORS
 FIRMWARE_MODEL=hifinet \
@@ -108,6 +114,20 @@ HiFiNet exchange uses protocol version 4, rejects CESTA version 3 and different 
 Benchmark telemetry retains the common schema-1 timing, communication edges, decision/window timestamps and prediction policy. Aggregated counts use `(round, edge, timestep)` identities: dense counts are `180 * neighbors`, and dense float payload bytes are `60 * neighbors * 4 * sum(round_widths)`. Per-edge requested/received byte totals use each round’s actual width; no single payload width is advertised across unequal rounds. Stage loading and invocation each check the common cycle deadline before admission and check again after execution. Benchmark telemetry reports every attempted round's per-edge requested/received timestep counts, retry/queue counts, width, cache admission and elapsed time, plus actual stage times and failures. Registered ESP-NOW peers are not claimed compatible merely because their MAC is registered. Inference explicitly labels zero received payloads `degraded_no_compatible_peer_payloads` (which also covers unreachable peers), and partial receipts `degraded_partial_round_payloads`. Even complete direct-neighbor receipts do not prove remote upstream graph completeness, so `full_graph_verified` remains false. A mixed CESTA/HiFiNet fleet cannot perform the full distributed HiFiNet graph; all participating nodes require matching bundles and node-specific builds.
 
 The validated seed12 host bundle contains 14 stages totaling 846,724 model bytes. Host numerical parity and successful firmware compilation do not establish on-device numerical parity, heap headroom, radio delivery, or deadline performance; these require connected-board and multi-node validation. The CESTA synthetic diagnostic is not substituted for HiFiNet inference and is excluded from HiFiNet builds.
+
+## STGCN deployment
+
+Installation/build validation uses the cached uv `tflite==2.18.0` environment to inspect actual FlatBuffer schema, single static float32 input/output shapes, and used builtin operators before embedding. Actual shapes/operators must match metadata; unknown/custom operators and dynamic I/O signatures are rejected.
+
+`scripts/export_firmware.py --architecture stgcn` exports the masked native STGCN path into two prepare → graph → finish blocks and a classifier. Each graph input includes receiver and sender inverse-square-root incoming degrees, including self loops; these must refer to the same active directed graph as the binary masks. Simply masking missing radio messages with static degrees is not native dynamic-mask inference.
+
+The seed42 DHT checkpoint exported into `runs/stgcn-device-final/bundle` has 13 stages totaling 132,392 bytes. `scripts/install_firmware.py --bundle <bundle> --output <empty-directory>` validates and copies the bundle; `--rust-output <file> --receiver 1` generates seven receiver-specific embeddings. A copy is installed at `firmware/model/stgcn/final`. Host PyTorch and TFLite logits pass explicit-mask native parity, including all-absent and timestep-varying directed edges. Select `FIRMWARE_MODEL=stgcn STGCN_BUNDLE="$PWD/model/stgcn/final" STGCN_RECEIVER=1` from the firmware directory. The receiver and ordered neighbors must match device configuration. No flashing or hardware inference validation is implied by host parity and compilation.
+
+Firmware executes seven stages with one reusable runner and two width-32 exchanges. Protocol v5 rejects CESTA/HiFiNet traffic and incompatible fingerprints; identity includes window, nonce, and round. Both prepared-state caches remain available until the common exchange cutoff; round receive budgets divide that cutoff in half. Stage loading and execution honor the common cycle deadline and unload after invocation failures. Per-round telemetry includes identity, actual receipts, retries, width and timings; dense possible messages are `120 * neighbors` and float payload bytes are `15360 * neighbors`.
+
+Firmware supplies fixed full-topology inverse degrees derived from the embedded graph, **not local receipt counts**. Missing messages are zero-filled/masked with unchanged coefficients and reported as `zero_mask_fixed_normalization_approximation` under `normalization_policy=fixed_full_topology`. This is explicitly not native dynamic-mask renormalization. Host export validates dynamic-mask native parity separately and also validates absent/partial/full receipts against an independent fixed-degree reference. Even full direct receipts cannot prove remote upstream completeness; telemetry never claims full graph verification.
+
+For the verified build environment, set both `SDKCONFIG` and `ESP_IDF_SDKCONFIG` to the absolute `target/verified-fresh/sdkconfig-8mb-custom` and `ESP_IDF_SDKCONFIG_DEFAULTS` to absolute `sdkconfig.defaults`, then execute `bash target/verified-fresh/build-command.sh`. Default CESTA and `FIRMWARE_MODEL=hifinet` remain separate selections.
 
 ## Build and flash
 

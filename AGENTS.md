@@ -26,6 +26,7 @@ Paths below are relative to `src/CESTA/`.
 | `datasets/` | Raw loaders and canonical artifacts |
 | `injection/` | Markov faults and injectors |
 | `models/` | Temporal and spatial models |
+| `deployment/` | Firmware export orchestration, checkpoint validation, conversion and parity |
 | `training/` | Trainer, objectives, losses, callbacks |
 | `evaluation/` | Evaluation, communication, energy, benchmarks |
 | `optimization/` | Optuna search |
@@ -115,8 +116,23 @@ Retain tracked experiment files only when they support the paper's Intel results
 - Keep CESTA inference, exchange, and synthetic diagnostics in `firmware/src/models/cesta/`; keep HiFiNet inference and exchange in `firmware/src/models/hifinet/`. Only CESTA builds include synthetic diagnostics. Model-internal dependencies use sibling modules.
 - Keep TFLite stage execution, ESP-NOW transport, sampling/resampling, fault injection, MQTT, telemetry, and device configuration shared outside `models/`. Model grouping must not change artifact locations, wire protocols, preprocessing, or decoding.
 
+### STGCN firmware
+
+- `models/spatial/stgcn/model.py` retains native checkpoint behavior, including its legacy unmasked tensor branch. Deployment parity uses explicit `GraphWindowBatch.edge_mask`; never repair the unmasked reshape silently.
+- `models/spatial/stgcn/deployment.py` splits each ST block into temporal preparation, receiver graph aggregation, and temporal finish with the retained block-input residual. Frozen BatchNorm is folded into temporal weights; preserve centered padding, ReLU placement, and raw features.
+- Graph inputs contain local and sender temporal states, their inverse square-root incoming degrees including self loops, and binary edge masks. Sender degrees must describe the same active graph as receiver degrees. Missing radio payloads alone cannot establish those degrees or native masked-graph parity.
+- `deployment/stgcn.py` validates explicit-mask native logits and first-index predictions before writing converted stages, plus independent fixed-degree degraded-reference checks. `scripts/install_firmware.py` validates the two-block, width-32, kernel-3 bundle and generates seven receiver-specific stage embeddings. Select `FIRMWARE_MODEL=stgcn`, absolute `STGCN_BUNDLE`, and `STGCN_RECEIVER`; receiver and ordered senders must match device configuration.
+
 ### HiFiNet firmware
 
 - Select HiFiNet with build-time `FIRMWARE_MODEL=hifinet`, an absolute `HIFINET_BUNDLE`, and `HIFINET_RECEIVER`; default CESTA remains independent. Validate the complete bundle before embedding receiver-specific stages.
 - Preserve temporal → three graph stages → classifier, retained temporal embeddings, raw features, self loops, trained round widths, binary received masks, and first-index argmax without CRF.
 - Radio identity includes bundle fingerprint, window, nonce and round; retain old round caches until the common window cutoff. Never accept CESTA or stale/wrong-round responses. Report actual per-round receipts and explicit degraded coverage, never infer full graph completeness from local peer registration.
+
+- STGCN firmware uses fixed full-topology inverse degrees embedded from validated topology. Missing receipts are zero-filled and masked without renormalization, explicitly a degraded approximation rather than native dynamic-graph inference. Protocol v5 separates models, bundles, windows, nonces, and two rounds; retain both caches until the common cutoff. Full direct receipts do not prove upstream completeness. One runner releases each stage before loading the next, including failed invocation.
+
+### Unified export boundary
+
+- `scripts/export_firmware.py` delegates to `deployment/cli.py`; checkpoint metadata selects only CESTA, HiFiNet, or STGCN. Explicit architecture assertions reject mismatches. Never import standalone scripts from package code or another exporter.
+- `deployment/common.py` owns strict finite/topology checkpoint loading, cadence checks, Micro operator/shape validation, concatenation lowering, staged conversion, and stage-level parity. Architecture modules retain native reference cases, decoding and artifact contracts; model-local deployment modules retain tensor transformations.
+- CESTA retains node-only raw-logit/CRF/gate parity. All exports require empty output directories and write `bundle.json` with a stage integrity table. CESTA writes `node.tflite`; installation explicitly maps it to firmware `model.tflite` and its bundle metadata to `model.json`. HiFiNet/STGCN retain all synchronous stages; validation-only bundles cannot be installed. The shared installer remains independent of the training package.

@@ -56,3 +56,11 @@ uv run cesta optimize --data data/datasets/Intel_fault15 --model cnn1d --n-trial
 ## License
 
 [MIT](LICENSE)
+
+## STGCN device export
+
+Use `scripts/export_firmware.py --model <checkpoint-directory> --output <empty-bundle-directory>` with the isolated LiteRT environment documented in [firmware/README.md](firmware/README.md), then `uv run --no-project --with tflite==2.18.0 python scripts/install_firmware.py --bundle <bundle> --output <empty-install-directory>`. The validated seed42 DHT artifact is `runs/stgcn-device-final/bundle`; the installed copy is `firmware/model/stgcn/final`. Export checks native explicit-mask inference and the separately labeled fixed-normalization missing-payload approximation used by firmware. Firmware selection, receiver identity, build environment, and radio semantics are documented in the firmware README.
+
+## Unified firmware export
+
+Run `uv run python scripts/export_firmware.py --help`. `--model <checkpoint-directory>` automatically selects CESTA, HiFiNet, or STGCN from checkpoint metadata; `--architecture cesta|hifinet|stgcn` optionally asserts that identity. Other architectures are rejected. Use the isolated LiteRT environment in [firmware/README.md](firmware/README.md) for conversion. CESTA requires `--receiver-index`; all models require an empty `--output` directory. HiFiNet/STGCN optionally support `--validate-only` for PyTorch parity without conversion. Validation-only bundles are not installable. Per-model scripts have been removed; installation and receiver embedding use `scripts/install_firmware.py`.
