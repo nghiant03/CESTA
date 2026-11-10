@@ -2,79 +2,21 @@ from __future__ import annotations
 
 import argparse
 import hashlib
-import inspect
 import json
-import shutil
-from copy import deepcopy
+from importlib import import_module
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 import torch
 
-from CESTA.artifacts import load_checkpoint_metadata, load_checkpoint_weights
+from CESTA.deployment.common import MAX_CONCATENATION_INPUTS, WINDOW_SIZE, convert_stage, load_deployment_checkpoint, validate_checkpoint_recipe
 from CESTA.models.spatial.cesta import CESTAClassifier
 from CESTA.models.spatial.cesta.deployment import CESTADeploymentModel, CESTALocalDeploymentModel, CESTANodeDeploymentModel
 
-WINDOW_SIZE = 60
-# esp-tflite-micro 1.3.5 kernels/concatenation.cc uses fixed arrays of this size.
-MAX_CONCATENATION_INPUTS = 10
-SUPPORTED_OPERATORS = {
-    "ABS",
-    "ADD",
-    "BATCH_MATMUL",
-    "BROADCAST_TO",
-    "CAST",
-    "CONCATENATION",
-    "DIV",
-    "EXP",
-    "FULLY_CONNECTED",
-    "GATHER",
-    "GREATER_EQUAL",
-    "LOG",
-    "LOGISTIC",
-    "MAXIMUM",
-    "MEAN",
-    "MINIMUM",
-    "MUL",
-    "NOT_EQUAL",
-    "PACK",
-    "REDUCE_MAX",
-    "RELU",
-    "RESHAPE",
-    "REVERSE_V2",
-    "RSQRT",
-    "SELECT_V2",
-    "SLICE",
-    "SOFTMAX",
-    "SPLIT",
-    "SQRT",
-    "SQUARED_DIFFERENCE",
-    "SUB",
-    "SUM",
-    "TANH",
-    "TRANSPOSE",
-    "UNPACK",
-}
 
-
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Export a trained CESTA checkpoint for ESP32-S3 TensorFlow Lite Micro inference.")
-    parser.add_argument("--model", type=Path, required=True, help="Trained CESTA run directory containing weight.pt and config.json.")
-    parser.add_argument("--output", type=Path, default=Path("firmware/model"), help="Directory for model.tflite and model.json.")
-    parser.add_argument(
-        "--target",
-        choices=("node", "local", "graph"),
-        default="node",
-        help="Export distributed per-node, local-only, or centralized full-graph inference.",
-    )
-    parser.add_argument("--receiver-index", type=int, help="Graph node index embedded in a distributed node export.")
-    parser.add_argument("--validation-artifact", action="store_true", help="Mark an untrained export as conversion validation only.")
-    parser.add_argument("--install", action="store_true", help="Install the export into firmware/model after validation.")
-    return parser.parse_args()
-
-
-def main() -> int:
-    args = parse_args()
+def export(args: argparse.Namespace) -> int:
+    if args.output.exists() and any(args.output.iterdir()):
+        raise ValueError("output directory must be empty to avoid mixing stage bundles")
     model = load_cesta_checkpoint(args.model)
     validate_model(model, args.target)
     sample_interval_secs = validate_checkpoint_recipe(args.model)
@@ -83,12 +25,12 @@ def main() -> int:
     if not torch.isfinite(model.crf_transitions).all():
         raise ValueError("nonfinite CRF transitions")
     node_metadata: dict[str, object] = {}
+    deployment_model: Any
     if args.target == "node":
         if args.receiver_index is None:
             raise ValueError("node export requires --receiver-index")
         deployment_model = CESTANodeDeploymentModel(model, args.receiver_index).eval()
         example = torch.zeros(1, WINDOW_SIZE, deployment_model.input_width, dtype=torch.float32)
-        expected_input = [1, WINDOW_SIZE, deployment_model.input_width]
         expected_output = [1, WINDOW_SIZE, deployment_model.output_width]
         node_metadata = {
             "receiver_index": args.receiver_index,
@@ -101,24 +43,15 @@ def main() -> int:
     elif args.target == "local":
         deployment_model = CESTALocalDeploymentModel(model).eval()
         example = torch.zeros(1, WINDOW_SIZE, model.features_per_node, dtype=torch.float32)
-        expected_input = [1, WINDOW_SIZE, model.features_per_node]
         expected_output = [1, WINDOW_SIZE, model.num_classes]
     else:
         deployment_model = CESTADeploymentModel(model).eval()
         example = torch.zeros(1, WINDOW_SIZE, model.num_nodes, model.features_per_node, dtype=torch.float32)
-        expected_input = [1, WINDOW_SIZE, model.num_nodes, model.features_per_node]
         expected_output = [1, WINDOW_SIZE, model.num_nodes, model.num_classes]
-    import litert_torch
-
-    converted = litert_torch.convert(deployment_model, (example,))
-    original_content = converted.model_content()
-    model_content, split_concatenations = split_large_concatenations(original_content)
-    operators, input_shape, output_shape = inspect_model(model_content)
-    unsupported = operators - SUPPORTED_OPERATORS
-    if unsupported:
-        raise ValueError(f"firmware does not register exported operators: {', '.join(sorted(unsupported))}")
-    if input_shape != expected_input or output_shape != expected_output:
-        raise ValueError(f"unexpected exported shapes: input={input_shape}, output={output_shape}")
+    original_content, model_content, conversion = convert_stage(deployment_model, example, expected_output)
+    operators = set(conversion["operators"])
+    input_shape, output_shape = conversion["input_shape"], conversion["output_shape"]
+    split_concatenations = conversion["split_concatenations"]
     examples = [example]
     if args.target == "node":
         # Exercise nonzero local data and absent, partial, and full neighbor payloads.
@@ -172,8 +105,8 @@ def main() -> int:
 
     output = args.output
     output.mkdir(parents=True, exist_ok=True)
-    model_path = output / "model.tflite"
-    metadata_path = output / "model.json"
+    model_path = output / "node.tflite"
+    metadata_path = output / "bundle.json"
     model_path.write_bytes(model_content)
     metadata = {
         "format": "cesta-tflite-micro-v3",
@@ -207,43 +140,18 @@ def main() -> int:
         "split_concatenations": split_concatenations,
         **node_metadata,
     }
+    metadata["converted"] = True
+    metadata["stages"] = {
+        "node": {"file": "node.tflite", "bytes": len(model_content), "sha256": hashlib.sha256(model_content).hexdigest(), **conversion}
+    }
     metadata_path.write_text(json.dumps(metadata, indent=2) + "\n")
-
-    if args.install:
-        firmware_model = Path("firmware/model")
-        firmware_model.mkdir(parents=True, exist_ok=True)
-        if model_path.resolve() != (firmware_model / "model.tflite").resolve():
-            shutil.copy2(model_path, firmware_model / "model.tflite")
-        if metadata_path.resolve() != (firmware_model / "model.json").resolve():
-            shutil.copy2(metadata_path, firmware_model / "model.json")
 
     print(f"Exported {len(model_content)} bytes to {model_path}")
     return 0
 
 
 def load_cesta_checkpoint(path: Path) -> CESTAClassifier:
-    metadata = load_checkpoint_metadata(path)
-    if metadata.get("model_name") != "cesta":
-        raise ValueError("checkpoint must contain a CESTA model")
-    raw_config = metadata.get("model_config")
-    if not isinstance(raw_config, dict):
-        raise ValueError("checkpoint metadata is missing model_config")
-    constructor_keys = set(inspect.signature(CESTAClassifier.__init__).parameters)
-    model = CESTAClassifier(**{key: value for key, value in raw_config.items() if key in constructor_keys})
-    return load_checkpoint_weights(model, path, map_location="cpu")
-
-
-def validate_checkpoint_recipe(path: Path) -> int:
-    metadata = load_checkpoint_metadata(path)
-    manifest = json.loads((path / "manifest.json").read_text())
-    for source in (metadata, manifest):
-        window = source.get("train_config", {}).get("data", {}).get("window", {}).get("window_size")
-        if window != WINDOW_SIZE:
-            raise ValueError(f"checkpoint configuration and manifest must explicitly declare window_size={WINDOW_SIZE}")
-    frequency = manifest.get("injection_config", {}).get("resample_freq")
-    if frequency not in {"1min", "60s", "60sec"}:
-        raise ValueError(f"node firmware requires a verified 60-second resample recipe, got {frequency!r}")
-    return 60
+    return load_deployment_checkpoint(path, "cesta", CESTAClassifier)
 
 
 def validate_model(model: CESTAClassifier, target: str) -> None:
@@ -266,89 +174,6 @@ def validate_model(model: CESTAClassifier, target: str) -> None:
         raise ValueError("distributed node export requires dense or gumbel_request communication")
     if model.structured_request_topk > 0:
         raise ValueError("firmware export does not support structured top-k requests")
-
-
-def split_large_concatenations(model_content: bytes) -> tuple[bytes, int]:
-    """Lower wide float concatenations to an ordered tree after converter fusion.
-
-    Rewriting the final FlatBuffer prevents the converter from fusing the tree
-    back into the 60-input concatenations produced by the unrolled RNN.
-    Existing output tensor IDs (including signature references) stay intact.
-    """
-    import flatbuffers
-    from ai_edge_litert import schema_py_generated as schema
-
-    model = schema.ModelT.InitFromObj(schema.Model.GetRootAsModel(model_content, 0))
-    rewritten = 0
-    for graph in model.subgraphs:
-        operators = []
-        for operator in graph.operators:
-            code = model.operatorCodes[operator.opcodeIndex]
-            if code.builtinCode != schema.BuiltinOperator.CONCATENATION or len(operator.inputs) <= MAX_CONCATENATION_INPUTS:
-                operators.append(operator)
-                continue
-            output = graph.tensors[operator.outputs[0]]
-            if output.type != schema.TensorType.FLOAT32 or any(graph.tensors[index].type != output.type for index in operator.inputs):
-                raise ValueError("splitting concatenations currently requires float32 tensors")
-            axis = operator.builtinOptions.axis % len(output.shape)
-            inputs = list(operator.inputs)
-            while len(inputs) > MAX_CONCATENATION_INPUTS:
-                grouped = []
-                for start in range(0, len(inputs), MAX_CONCATENATION_INPUTS):
-                    chunk = inputs[start : start + MAX_CONCATENATION_INPUTS]
-                    if len(chunk) == 1:
-                        grouped.extend(chunk)
-                        continue
-                    tensor = deepcopy(output)
-                    tensor.name = f"cesta_concat_{len(graph.tensors)}".encode()
-                    tensor.shape = list(output.shape)
-                    tensor.shape[axis] = sum(int(graph.tensors[index].shape[axis]) for index in chunk)
-                    tensor.shapeSignature = None
-                    tensor.buffer = 0
-                    tensor_index = len(graph.tensors)
-                    graph.tensors.append(tensor)
-                    intermediate = deepcopy(operator)
-                    intermediate.inputs = chunk
-                    intermediate.outputs = [tensor_index]
-                    # Apply a fused activation only once, at the original output.
-                    intermediate.builtinOptions.fusedActivationFunction = schema.ActivationFunctionType.NONE
-                    operators.append(intermediate)
-                    grouped.append(tensor_index)
-                inputs = grouped
-            operator.inputs = inputs
-            operators.append(operator)
-            rewritten += 1
-        graph.operators = operators
-    if not rewritten:
-        return model_content, 0
-    builder = flatbuffers.Builder(len(model_content))
-    builder.Finish(model.Pack(builder), file_identifier=b"TFL3")
-    return bytes(builder.Output()), rewritten
-
-
-def inspect_model(model_content: bytes) -> tuple[set[str], list[int], list[int]]:
-    import tflite
-
-    if len(model_content) < 8 or model_content[4:8] != b"TFL3":
-        raise ValueError("converter did not produce a TensorFlow Lite FlatBuffer")
-    flatbuffer = tflite.Model.GetRootAsModel(model_content, 0)
-    operators = {
-        tflite.opcode2name(flatbuffer.OperatorCodes(index).BuiltinCode())
-        for index in range(flatbuffer.OperatorCodesLength())
-    }
-    subgraph = flatbuffer.Subgraphs(0)
-    for graph_index in range(flatbuffer.SubgraphsLength()):
-        graph = flatbuffer.Subgraphs(graph_index)
-        for index in range(graph.OperatorsLength()):
-            operator = graph.Operators(index)
-            code = flatbuffer.OperatorCodes(operator.OpcodeIndex()).BuiltinCode()
-            if code == tflite.BuiltinOperator.CONCATENATION and operator.InputsLength() > MAX_CONCATENATION_INPUTS:
-                raise ValueError(f"subgraph {graph_index} concatenation {index} exceeds the TFLite Micro input limit")
-    if subgraph.InputsLength() != 1 or subgraph.OutputsLength() != 1:
-        raise ValueError("firmware model must have exactly one input and one output")
-    input_tensor = subgraph.Tensors(subgraph.Inputs(0))
-    output_tensor = subgraph.Tensors(subgraph.Outputs(0))
-    return operators, input_tensor.ShapeAsNumpy().tolist(), output_tensor.ShapeAsNumpy().tolist()
 
 
 def decode_emissions(emissions: torch.Tensor, transitions: torch.Tensor) -> torch.Tensor:
@@ -377,7 +202,7 @@ def verify_numerical_parity(
     transitions: torch.Tensor | None = None,
 ) -> None:
     import numpy as np
-    from ai_edge_litert.interpreter import Interpreter
+    Interpreter = import_module("ai_edge_litert.interpreter").Interpreter
 
     interpreter = Interpreter(model_content=model_content)
     interpreter.allocate_tensors()
@@ -409,5 +234,3 @@ def verify_numerical_parity(
         np.testing.assert_allclose(actual, before_rewrite, rtol=1e-6, atol=1e-7)
 
 
-if __name__ == "__main__":
-    raise SystemExit(main())
